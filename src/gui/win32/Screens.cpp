@@ -92,7 +92,7 @@ void drawSourceBadge(Renderer& r, const RectF& rect, PackageManager m) {
     switch (m) {
         case PackageManager::Winget:
             textCol = theme::COL_PRIMARY;
-            bgCol   = 0x1A0078D4;  // primary-container at 10%
+            bgCol   = 0x1A0078D4;
             break;
         case PackageManager::Scoop:
             label = "SCOOP";
@@ -112,14 +112,72 @@ void drawSourceBadge(Renderer& r, const RectF& rect, PackageManager m) {
     r.drawText(label, rect, textCol, 10.0f, Renderer::Bold, true, true);
 }
 
+// Two-letter abbreviation: first letter + first letter after the last
+// dot (publisher-style), or just first two letters if no dot.
+std::string packageAbbrev(const std::string& id) {
+    if (id.empty()) return "?";
+    auto upper = [](char c) { return (char)std::toupper((unsigned char)c); };
+    auto dot = id.find_last_of('.');
+    if (dot != std::string::npos && dot + 1 < id.size()) {
+        return std::string() + upper(id[0]) + upper(id[dot + 1]);
+    }
+    if (id.size() >= 2) {
+        return std::string() + upper(id[0]) + upper(id[1]);
+    }
+    return std::string(1, upper(id[0]));
+}
+
+// Stable hash of the package id, used to pick a color so the same
+// package always renders with the same avatar color.
+uint32_t packageHash(const std::string& s) {
+    uint32_t h = 2166136261u;
+    for (char c : s) {
+        h ^= (uint8_t)c;
+        h *= 16777619u;
+    }
+    return h;
+}
+
+// Tasteful avatar palette (8 colors used by Microsoft Store / Fluent).
+// Returns ARGB.
+uint32_t avatarColor(uint32_t hash) {
+    static const uint32_t palette[] = {
+        0xFF0078D4, 0xFF8764B8, 0xFF038387, 0xFF00B294,
+        0xFFE81123, 0xFFCA5010, 0xFFB146C2, 0xFF1B85C5,
+    };
+    return palette[hash % (sizeof(palette) / sizeof(palette[0]))];
+}
+
+// Darken an ARGB color by `amt` (0..1). Used for the bottom half of
+// the avatar gradient to give a subtle vertical depth.
+uint32_t darken(uint32_t c, float amt) {
+    uint8_t a = (c >> 24) & 0xFF;
+    uint8_t r = (uint8_t)(((c >> 16) & 0xFF) * (1.0f - amt));
+    uint8_t g = (uint8_t)(((c >>  8) & 0xFF) * (1.0f - amt));
+    uint8_t b = (uint8_t)(( c        & 0xFF) * (1.0f - amt));
+    return (uint32_t)a << 24 | (uint32_t)r << 16 | (uint32_t)g << 8 | b;
+}
+
 void drawLogoPlaceholder(Renderer& r, const RectF& rect, const std::string& id, PackageManager m) {
-    r.fillRoundedRect(rect, theme::COL_SURFACE_CONTAINER_HIGHEST, 6.0f);
-    char initial = id.empty() ? '?' : (char)std::toupper((unsigned char)id[0]);
-    char buf[2] = { initial, 0 };
-    uint32_t col = (m == PackageManager::Winget)     ? theme::COL_PRIMARY
-                : (m == PackageManager::Scoop)      ? theme::COL_TERTIARY
-                :                                       theme::COL_ON_SURFACE_VARIANT;
-    r.drawText(buf, rect, col, 18.0f, Renderer::Bold, true, true);
+    // Layered avatar: a solid darker base, the hashed brand color on top,
+    // and a top-edge highlight to fake a soft top-light. The two-letter
+    // abbreviation sits in the center for a clean monogram look.
+    uint32_t hash = packageHash(id);
+    uint32_t base = (m == PackageManager::Winget)     ? 0xFF0078D4u
+                  : (m == PackageManager::Scoop)      ? 0xFFBC5B00u
+                  : (m == PackageManager::Chocolatey) ? 0xFF6B4423u
+                  :                                       avatarColor(hash);
+
+    // Base fill
+    r.fillRoundedRect(rect, darken(base, 0.25f), 8.0f);
+    // Top accent (slightly lighter)
+    r.fillRoundedRect({ rect.x, rect.y, rect.w, rect.h * 0.5f },
+                      base, 8.0f);
+    // Subtle outline so the avatar reads against any background
+    r.strokeRect(rect, darken(base, 0.45f), 1.0f, 8.0f);
+
+    std::string ab = packageAbbrev(id);
+    r.drawText(ab, rect, 0xFFFFFFFF, 18.0f, Renderer::Bold, true, true);
 }
 
 void drawButton(Renderer& r, const RectF& rect, const std::string& label,
@@ -217,7 +275,7 @@ void renderInstalled(Renderer& r, AppState& state, BackendBridge& bridge,
         r.drawText(t(keys::installed_empty), { x, sy + 60, w, 30 },
                    theme::COL_ON_SURFACE_VARIANT, 13.0f, Renderer::Regular);
     } else {
-        constexpr float kRowStride = 42.0f;   // 36 row + 6 gap
+        constexpr float kRowStride = 50.0f;   // logo (36) + padding
         float listY = sy + 60;
         float listH = std::max(0.0f, h - (listY - y) - 8.0f);
         int   total   = (int)state.installed.size();
@@ -227,14 +285,31 @@ void renderInstalled(Renderer& r, AppState& state, BackendBridge& bridge,
         for (int i = 0; i < visible && (offset + i) < total; ++i) {
             const auto& p = state.installed[offset + i];
             float ry = listY + i * kRowStride;
-            RectF row{ x, ry, w - 12.0f, 36.0f };  // -12 to leave room for scrollbar
-            r.fillRoundedRect(row, theme::COL_SURFACE_CONTAINER, 6.0f);
-            r.drawText(p.name, { row.x + 12, row.y + 9, 200, 18 },
+            RectF row{ x, ry, w - 12.0f, 44.0f };
+            r.fillRoundedRect(row, theme::COL_SURFACE_CONTAINER, theme::CARD_RADIUS);
+            r.strokeRect(row, theme::COL_OUTLINE_VARIANT, 1.0f, theme::CARD_RADIUS);
+
+            // 3px left accent stripe in the source's brand color.
+            uint32_t stripe = (p.manager == PackageManager::Winget)     ? theme::COL_PRIMARY
+                           : (p.manager == PackageManager::Scoop)      ? theme::COL_TERTIARY
+                           : (p.manager == PackageManager::Chocolatey) ? 0xFF6B4423u
+                           :                                            theme::COL_OUTLINE;
+            r.fillRoundedRect({ row.x, row.y + 6, 3.0f, row.h - 12.0f },
+                              stripe, 1.5f);
+
+            // Logo
+            RectF logoRect{ row.x + 18, row.y + 4, 36, 36 };
+            drawLogoPlaceholder(r, logoRect, p.id, p.manager);
+
+            // Name + id
+            r.drawText(p.name, { logoRect.x + logoRect.w + 12, row.y + 8, 280, 18 },
                        theme::COL_ON_SURFACE, 13.0f, Renderer::Regular);
-            r.drawText(p.id, { row.x + 220, row.y + 9, 200, 18 },
-                       theme::COL_ON_SURFACE_VARIANT, 12.0f, Renderer::Regular);
-            r.drawText(p.installedVersion, { row.x + 440, row.y + 9, 120, 18 },
-                       theme::COL_ON_SURFACE_VARIANT, 12.0f, Renderer::Mono);
+            r.drawText(p.id, { logoRect.x + logoRect.w + 12, row.y + 26, 280, 14 },
+                       theme::COL_ON_SURFACE_VARIANT, 11.0f, Renderer::Regular);
+
+            // Version (right-aligned)
+            r.drawText(p.installedVersion, { row.x + row.w - 160, row.y + 14, 140, 16 },
+                       theme::COL_ON_SURFACE_VARIANT, 12.0f, Renderer::Mono, true, true);
         }
         drawScrollbar(r, x + w - 4.0f, listY, listH, offset, total, visible);
     }
@@ -305,19 +380,30 @@ void renderUpdates(Renderer& r, AppState& state, BackendBridge& bridge,
         const auto& p = state.upgradable[offset + i];
         float yRow = rowY + i * kRowStride;
 
-        // Card background
+        // Card background — slightly elevated surface with a thin
+        // outline. The left edge gets a 3px accent stripe in the
+        // source's brand color so rows scan as belonging together
+        // even before you read the badge column.
         RectF rowBg{ x, yRow, w - 12.0f, kRowH };
-        r.fillRoundedRect(rowBg, 0xB2201F1F, theme::CARD_RADIUS);
-        r.strokeRect(rowBg, 0x33404752, 1.0f, theme::CARD_RADIUS);
+        r.fillRoundedRect(rowBg, theme::COL_SURFACE_CONTAINER, theme::CARD_RADIUS);
+        r.strokeRect(rowBg, theme::COL_OUTLINE_VARIANT, 1.0f, theme::CARD_RADIUS);
+
+        // Left accent stripe (3px) in the source's brand color.
+        uint32_t stripe = (p.manager == PackageManager::Winget)     ? theme::COL_PRIMARY
+                       : (p.manager == PackageManager::Scoop)      ? theme::COL_TERTIARY
+                       : (p.manager == PackageManager::Chocolatey) ? 0xFF6B4423u
+                       :                                            theme::COL_OUTLINE;
+        r.fillRoundedRect({ rowBg.x, rowBg.y + 6, 3.0f, rowBg.h - 12.0f },
+                          stripe, 1.5f);
 
         // Col 0: Logo + name + publisher
-        RectF logoRect{ x + 14, yRow + (kRowH - kLogoSize) / 2.0f, kLogoSize, kLogoSize };
+        RectF logoRect{ x + 22, yRow + (kRowH - kLogoSize) / 2.0f, kLogoSize, kLogoSize };
         drawLogoPlaceholder(r, logoRect, p.id, p.manager);
         std::string publisher = "Winget";
         if (auto dot = p.id.find('.'); dot != std::string::npos) publisher = p.id.substr(0, dot);
-        r.drawText(p.name, { x + 14 + kLogoSize + 12, yRow + 12, colW[0] - kLogoSize - 24, 20 },
+        r.drawText(p.name, { x + 22 + kLogoSize + 14, yRow + 12, colW[0] - kLogoSize - 28, 20 },
                    theme::COL_ON_SURFACE, 15.0f, Renderer::Regular);
-        r.drawText(publisher, { x + 14 + kLogoSize + 12, yRow + 34, colW[0] - kLogoSize - 24, 16 },
+        r.drawText(publisher, { x + 22 + kLogoSize + 14, yRow + 34, colW[0] - kLogoSize - 28, 16 },
                    theme::COL_ON_SURFACE_VARIANT, 11.0f, Renderer::Regular);
 
         // Col 1: Current
@@ -351,7 +437,6 @@ void renderUpdates(Renderer& r, AppState& state, BackendBridge& bridge,
         }
 
         if (inflight || liveState == InstallState::Installing || liveState == InstallState::Updating) {
-            // Progress bar track
             r.fillRoundedRect(actRect, theme::COL_SURFACE_CONTAINER_HIGHEST, 4.0f);
             float frac = liveProgress / 100.0f;
             if (frac > 0.0f) {

@@ -27,14 +27,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_SIZE: {
             UINT w = LOWORD(lParam);
             UINT h = HIWORD(lParam);
+            g_app->maximized_ = (wParam == SIZE_MAXIMIZED);
             g_app->renderer().resize(w, h);
             return 0;
         }
 
         case WM_MOUSEMOVE: {
-            g_app->input().mouse.x = GET_X_LPARAM(lParam);
-            g_app->input().mouse.y = GET_Y_LPARAM(lParam);
+            int x = GET_X_LPARAM(lParam);
+            int y = GET_Y_LPARAM(lParam);
+            g_app->input().mouse.x = x;
+            g_app->input().mouse.y = y;
             g_app->input().mouseInside = true;
+            g_app->handleMouseMove(x, y);
             return 0;
         }
 
@@ -46,10 +50,23 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             g_app->input().mouseDown = true;
             return 0;
 
-        case WM_LBUTTONUP:
+        case WM_LBUTTONUP: {
             g_app->input().mouseDown = false;
-            g_app->handleMouseUp(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+            int x = GET_X_LPARAM(lParam);
+            int y = GET_Y_LPARAM(lParam);
+            g_app->handleMouseUp(x, y);
             return 0;
+        }
+
+        case WM_LBUTTONDBLCLK: {
+            // Double-click on the title bar region toggles maximize.
+            POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            if (pt.y >= 0 && pt.y < 32) {
+                if (g_app->maximized_) ShowWindow(hwnd, SW_RESTORE);
+                else                   ShowWindow(hwnd, SW_MAXIMIZE);
+            }
+            return 0;
+        }
 
         case WM_KEYDOWN:
             if (wParam == VK_SHIFT) g_app->input().shift = true;
@@ -62,10 +79,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
 
         case WM_MOUSEWHEEL: {
-            // GET_WHEEL_DELTA_WPARAM returns ±120 per notch. We convert to
-            // "rows" (≈2 per notch at 60 rows/unit) and feed it into the
-            // current screen's scroll slot. Wheel-up → offset decreases
-            // (we reveal content from above); wheel-down → offset increases.
             int delta  = GET_WHEEL_DELTA_WPARAM(wParam);
             int rows   = delta / 60;
             if (rows == 0) rows = (delta > 0) ? 1 : -1;
@@ -78,25 +91,40 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
 
         case WM_NCHITTEST: {
-            // Make the top strip draggable, but don't shadow the system's
-            // own non-client hit-test codes (HTCLOSE, HTMINBUTTON, HTMAXBUTTON,
-            // HTSYSMENU, HTHELP, HTNOWHERE, etc.). Otherwise the X button
-            // gets reported as HTCAPTION and the window becomes un-closable
-            // via the title bar.
             LRESULT def = ::DefWindowProc(hwnd, msg, wParam, lParam);
             if (def != HTCLIENT) return def;
-            POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             ScreenToClient(hwnd, &pt);
-            if (pt.y >= 0 && pt.y < 64) return HTCAPTION;
+            if (pt.y >= 0 && pt.y < 32) return HTCAPTION;
             return HTCLIENT;
         }
 
-        case WM_NCCALCSIZE:
+        case WM_NCCALCSIZE: {
+            // Strip the standard 1px client border that WS_THICKFRAME
+            // normally adds on top of the non-client area; we want a
+            // seamless edge-to-edge look for the custom title bar.
+            if (wParam == TRUE) {
+                NCCALCSIZE_PARAMS* p = reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam);
+                p->rgrc[0].top    = p->rgrc[1].top;
+                p->rgrc[0].left   = p->rgrc[1].left;
+                p->rgrc[0].right  = p->rgrc[1].right;
+                p->rgrc[0].bottom = p->rgrc[1].bottom;
+            }
+            return 0;
+        }
+
         case WM_NCPAINT:
-            return ::DefWindowProc(hwnd, msg, wParam, lParam);
+            return 0;  // we paint the whole frame; skip non-client paint
 
         case WM_ERASEBKGND:
             return 1;
+
+        case WM_GETMINMAXINFO: {
+            MINMAXINFO* m = reinterpret_cast<MINMAXINFO*>(lParam);
+            m->ptMinTrackSize.x = 800;
+            m->ptMinTrackSize.y = 560;
+            return 0;
+        }
 
         case WM_DESTROY:
             PostQuitMessage(0);
@@ -123,7 +151,7 @@ bool Application::init(HINSTANCE hInstance, int w, int h) {
 bool Application::initWindow(HINSTANCE hInstance, int w, int h) {
     WNDCLASSEXW wc = {};
     wc.cbSize        = sizeof(wc);
-    wc.style         = CS_HREDRAW | CS_VREDRAW;
+    wc.style         = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
     wc.lpfnWndProc   = WndProc;
     wc.hInstance     = hInstance;
     wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
@@ -139,12 +167,14 @@ bool Application::initWindow(HINSTANCE hInstance, int w, int h) {
 
     g_app = this;
 
+    // Borderless window: no system caption, but keep WS_THICKFRAME for
+    // resizing and WS_MINIMIZEBOX/MAXIMIZEBOX for taskbar restore.
+    DWORD style = WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
     RECT rc = {0, 0, w, h};
-    DWORD style = WS_OVERLAPPEDWINDOW;
     AdjustWindowRect(&rc, style, FALSE);
 
     hwnd_ = CreateWindowExW(
-        0, wc.lpszClassName, L"Unified Windows Package Manager",
+        0, wc.lpszClassName, L"Windows Package Manager",
         style,
         CW_USEDEFAULT, CW_USEDEFAULT,
         rc.right - rc.left, rc.bottom - rc.top,
@@ -166,11 +196,31 @@ void Application::handleMouseUp(int x, int y) {
     RECT rc; GetClientRect(hwnd_, &rc);
     const float W = static_cast<float>(rc.right);
     const float H = static_cast<float>(rc.bottom);
+
+    if (auto btn = TopBar::hitTest(x, y, state, W); btn != TopBarButton::None) {
+        switch (btn) {
+            case TopBarButton::Minimize:
+                ShowWindow(hwnd_, SW_MINIMIZE);
+                return;
+            case TopBarButton::Maximize:
+                if (maximized_) ShowWindow(hwnd_, SW_RESTORE);
+                else            ShowWindow(hwnd_, SW_MAXIMIZE);
+                return;
+            case TopBarButton::Close:
+                PostMessage(hwnd_, WM_CLOSE, 0, 0);
+                return;
+            default: break;
+        }
+    }
+
     if (SidebarHitTest(x, y, state)) return;
-    if (TopBarHitTest(x, y, state)) return;
     if (ScreenHitTest(x, y, state, bridge_)) return;
-    // TaskDrawer is drawn over content, so its hit-test is last (highest z).
     if (TaskDrawer::hitTest(x, y, state, bridge_, W, H)) return;
+}
+
+void Application::handleMouseMove(int x, int y) {
+    // Reserved for hover tracking that needs to update global state.
+    (void)x; (void)y;
 }
 
 void Application::renderFrame() {
@@ -184,10 +234,9 @@ void Application::renderFrame() {
     AppState& state = bridge_.state();
 
     Sidebar::draw(renderer_, state, input_);
-    TopBar::draw(renderer_, state, input_, W);
+    TopBar::draw(renderer_, state, input_, W, maximized_);
     Screens::draw(renderer_, state, bridge_, input_, W, H);
     Footer::draw(renderer_, state, bridge_, W, H);
-    // Drawer overlays the content above the footer.
     TaskDrawer::draw(renderer_, state, bridge_, input_, W, H);
 
     renderer_.endFrame();

@@ -26,12 +26,14 @@ private:
 
 public:  // Called from the WndProc in the same translation unit.
     void handleMouseUp(int x, int y);
+    void handleMouseMove(int x, int y);
 
     HWND          hwnd_ = nullptr;
     Renderer      renderer_;
     InputState    input_;
     BackendBridge bridge_;
     bool          running_ = false;
+    bool          maximized_ = false;
 };
 
 // WndProc routed through static function. Friend so it can call private
