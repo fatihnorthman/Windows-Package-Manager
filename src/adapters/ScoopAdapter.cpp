@@ -14,12 +14,16 @@ namespace pm {
 
 namespace {
 
-// ---------------- Scoop parsers ----------------
-//
-// `scoop list` table layout (scoop v0.10+):
-//   Name    Version    Source    Updated                 Info
-//   ----    -------    ------    -------                 ----
-//   7zip    23.01      main      2024-01-15 12:34:56
+// Scoop installs itself as a "shim" in C:\Users\<u>\scoop\shims. The
+// shim directory contains `scoop` (a tiny unix-style launcher), the
+// real `scoop.cmd` (a batch wrapper around the PowerShell core), and
+// `scoop.ps1`. CreateProcessW with the bare name "scoop" finds the
+// 343-byte shim file, tries to run it as a PE, and fails. The actual
+// entry point Windows must launch is `scoop.cmd`, which is what
+// shells expand to when the user types `scoop`. We hard-code that
+// extension so ProcessRunner can find it.
+constexpr const char* kScoopExe = "scoop.cmd";
+
 std::vector<PackageInfo> parseScoopList(const std::string& table) {
     std::vector<PackageInfo> pkgs;
     std::istringstream iss(table);
@@ -35,13 +39,8 @@ std::vector<PackageInfo> parseScoopList(const std::string& table) {
         PackageInfo p;
         p.manager = PackageManager::Scoop;
         p.name    = cols[0];
-        p.id      = cols[0]; // scoop uses name as id
+        p.id      = cols[0];
         if (cols.size() >= 2) p.installedVersion = cols[1];
-        if (cols.size() >= 3) {
-            // cols[2] = Source bucket (main/extras/etc) — store into availableVersion
-            // is wrong; we leave it as a heuristic for the source badge instead.
-            // For now keep installed as version only.
-        }
         if (p.id.empty()) continue;
         p.state = InstallState::UpToDate;
         pkgs.push_back(std::move(p));
@@ -49,9 +48,6 @@ std::vector<PackageInfo> parseScoopList(const std::string& table) {
     return pkgs;
 }
 
-// `scoop status` layout:
-//   Name    Version    "Update Available"    Notes
-//   ----    -------    -----------------    -----
 std::vector<PackageInfo> parseScoopStatus(const std::string& table) {
     std::vector<PackageInfo> pkgs;
     std::istringstream iss(table);
@@ -78,9 +74,6 @@ std::vector<PackageInfo> parseScoopStatus(const std::string& table) {
     return pkgs;
 }
 
-// `scoop search <q>` is `scoop search` followed by table:
-//   Name    Version    Source    Binaries    Description
-// We treat any line that pastes 3+ cols as a hit.
 std::vector<PackageInfo> parseScoopSearch(const std::string& table) {
     std::vector<PackageInfo> pkgs;
     std::istringstream iss(table);
@@ -107,12 +100,12 @@ std::vector<PackageInfo> parseScoopSearch(const std::string& table) {
 } // anonymous
 
 bool ScoopAdapter::isAvailable() const {
-    return adapters::probeVersion("scoop");
+    return adapters::probeVersion(kScoopExe);
 }
 
 void ScoopAdapter::listInstalled(PackageListCallback cb) {
     ProcessOptions opt;
-    opt.executable = "scoop";
+    opt.executable = kScoopExe;
     opt.arguments  = { "list" };
     std::thread([cb = std::move(cb), opt]() mutable {
         adapters::runAndParseAsync(opt, parseScoopList, std::move(cb));
@@ -121,7 +114,7 @@ void ScoopAdapter::listInstalled(PackageListCallback cb) {
 
 void ScoopAdapter::listUpgradable(PackageListCallback cb) {
     ProcessOptions opt;
-    opt.executable = "scoop";
+    opt.executable = kScoopExe;
     opt.arguments  = { "status" };
     std::thread([cb = std::move(cb), opt]() mutable {
         adapters::runAndParseAsync(opt, parseScoopStatus, std::move(cb));
@@ -130,7 +123,7 @@ void ScoopAdapter::listUpgradable(PackageListCallback cb) {
 
 void ScoopAdapter::search(const std::string& query, PackageListCallback cb) {
     ProcessOptions opt;
-    opt.executable = "scoop";
+    opt.executable = kScoopExe;
     opt.arguments  = { "search", query };
     std::thread([cb = std::move(cb), opt]() mutable {
         adapters::runAndParseAsync(opt, parseScoopSearch, std::move(cb));
@@ -147,8 +140,6 @@ void ScoopAdapter::performAction(const PackageInfo& pkg,
             args = { "install", pkg.id };
             break;
         case TaskAction::Upgrade:
-            // `scoop update <pkg>` updates a single app. `scoop update *` updates
-            // everything; we explicitly target the package here.
             args = { "update", pkg.id };
             break;
         case TaskAction::Uninstall:
@@ -156,7 +147,7 @@ void ScoopAdapter::performAction(const PackageInfo& pkg,
             break;
     }
     ProcessOptions opt;
-    opt.executable = "scoop";
+    opt.executable = kScoopExe;
     opt.arguments  = std::move(args);
 
     auto runner = std::make_shared<ProcessRunner>();
