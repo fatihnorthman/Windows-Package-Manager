@@ -102,6 +102,7 @@ public:
     void enqueueUpgradeAll();
     void enqueueUpgradeOne(const PackageInfo& pkg);
     void enqueueInstallOne(const PackageInfo& pkg);
+    void enqueueUninstallOne(const PackageInfo& pkg);
 
     // Snapshot of current tasks for the UI.
     std::vector<Task> snapshotTasks() const;

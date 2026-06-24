@@ -133,8 +133,6 @@ void Renderer::endFrame() {
     if (hr == D2DERR_RECREATE_TARGET) {
         discardDeviceResources();
         createDeviceResources();
-    } else {
-        renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
     }
 }
 

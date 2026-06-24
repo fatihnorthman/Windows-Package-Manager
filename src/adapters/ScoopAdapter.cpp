@@ -154,7 +154,7 @@ void ScoopAdapter::performAction(const PackageInfo& pkg,
     runner->onProgress([progressCb](int p) {
         if (progressCb) progressCb(p);
     });
-    runner->onComplete([done](const ProcessResult& res) {
+    runner->onComplete([done, runner](const ProcessResult& res) {
         bool ok = (res.exitCode == 0) && !res.cancelled;
         std::string msg = ok ? "OK (" + std::to_string(res.exitCode) + ")"
                              : "FAILED (" + std::to_string(res.exitCode) + "): " + res.stderrText;

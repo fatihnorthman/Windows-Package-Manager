@@ -107,7 +107,7 @@ std::vector<PackageInfo> parseListTable(const std::string& table) {
         if (p.availableVersion.empty() || p.availableVersion == p.installedVersion) {
             p.state = InstallState::UpToDate;
         } else {
-            p.state = InstallState::Updating;
+            p.state = InstallState::Unknown; // means "update available", not actively updating
         }
         pkgs.push_back(std::move(p));
     }
@@ -153,15 +153,15 @@ std::vector<PackageInfo> parseSearchTable(const std::string& table, const std::s
 std::string runAndReadFile(const std::vector<std::string>& args, const std::filesystem::path& file) {
     auto promise = std::make_shared<std::promise<bool>>();
     auto fut     = promise->get_future();
-    std::string captured;
+    auto captured = std::make_shared<std::string>();
 
     ProcessOptions opt;
     opt.executable = "winget";
     opt.arguments  = args;
 
     auto runner = std::make_shared<ProcessRunner>();
-    runner->onComplete([&captured, promise](const ProcessResult& res) {
-        captured = res.stdoutText + res.stderrText;
+    runner->onComplete([captured, promise](const ProcessResult& res) {
+        *captured = res.stdoutText + res.stderrText;
         promise->set_value(res.exitCode == 0 && !res.cancelled);
     });
     if (!runner->start(opt)) return {};
@@ -284,7 +284,7 @@ void WingetAdapter::performAction(const PackageInfo& pkg,
     // worker thread is joined in the ProcessRunner destructor, so
     // by the time the destructor runs the lambda has already fired
     // and the `runner` shared_ptr here is the only outstanding ref.
-    runner->onComplete([done](const ProcessResult& res) {
+    runner->onComplete([done, runner](const ProcessResult& res) {
         bool ok = (res.exitCode == 0) && !res.cancelled;
         std::string msg = ok ? "OK (" + std::to_string(res.exitCode) + ")"
                              : "FAILED (" + std::to_string(res.exitCode) + "): " + res.stderrText;

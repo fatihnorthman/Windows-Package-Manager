@@ -51,6 +51,10 @@ namespace keys {
     constexpr std::string_view discover_btn_install   = "discover_btn_install";
     constexpr std::string_view discover_btn_installing = "discover_btn_installing";
 
+    constexpr std::string_view installed_btn_uninstall     = "installed_btn_uninstall";
+    constexpr std::string_view installed_btn_uninstalling  = "installed_btn_uninstalling";
+    constexpr std::string_view installed_btn_uninstall_done = "installed_btn_uninstall_done";
+
     constexpr std::string_view tasks_title        = "tasks_title";
     constexpr std::string_view tasks_subtitle     = "tasks_subtitle";
     constexpr std::string_view tasks_empty        = "tasks_empty";

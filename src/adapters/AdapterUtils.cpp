@@ -9,7 +9,7 @@
 namespace pm::adapters {
 
 namespace {
-std::string utf8ToWide_unused; // keep file self-contained
+// Intentionally empty anonymous namespace (keeps TU self-contained).
 }
 
 void runAndParseAsync(

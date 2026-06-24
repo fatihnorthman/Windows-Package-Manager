@@ -39,6 +39,13 @@ void BackendBridge::init() {
         if (t.state == InstallState::Installed || t.state == InstallState::Failed) {
             unmarkInFlight(t.package.manager, t.package.id);
         }
+        // Auto-refresh the package lists when a task completes so the UI
+        // reflects the new install/upgrade/uninstall state without the
+        // user having to press Refresh manually.
+        if (t.state == InstallState::Installed) {
+            refreshInstalled();
+            refreshUpgradable();
+        }
     });
 
     Logger::instance().info("BackendBridge ready: ", adapters_.size(), " adapter(s) active");
@@ -217,6 +224,17 @@ void BackendBridge::enqueueInstallOne(const PackageInfo& pkg) {
     if (!findAdapter(pkg.manager)) return;
     markInFlight(pkg.manager, pkg.id);
     queue_->enqueue(pkg, TaskAction::Install);
+}
+
+void BackendBridge::enqueueUninstallOne(const PackageInfo& pkg) {
+    if (isInFlight(pkg.manager, pkg.id)) return;
+    if (!findAdapter(pkg.manager)) {
+        Logger::instance().warn("enqueueUninstallOne: no adapter for manager=",
+                                toString(pkg.manager));
+        return;
+    }
+    markInFlight(pkg.manager, pkg.id);
+    queue_->enqueue(pkg, TaskAction::Uninstall);
 }
 
 std::vector<Task> BackendBridge::snapshotTasks() const {

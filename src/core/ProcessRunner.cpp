@@ -53,6 +53,9 @@ ProcessRunner::~ProcessRunner() {
 
 bool ProcessRunner::start(const ProcessOptions& opts) {
     if (running_.load()) return false;
+    // Join any leftover worker from a previous run so we don't call
+    // std::thread::operator= on a joinable thread (which is UB / terminate).
+    if (worker_.joinable()) worker_.join();
     opts_   = opts;
     cancel_ = false;
     running_ = true;
@@ -109,7 +112,10 @@ void ProcessRunner::run() {
         return;
     }
 
-    processHandle_ = pi.hProcess;
+    {
+        std::lock_guard<std::mutex> lk(handleMtx_);
+        processHandle_ = pi.hProcess;
+    }
     CloseHandle(pi.hThread);
     CloseHandle(outP.write);
     CloseHandle(errP.write);
@@ -119,15 +125,39 @@ void ProcessRunner::run() {
     int          lastPercent = -1;
     const std::regex percentRe(R"((\d{1,3})\s*%)");
 
+    // Process a single complete line: notify line callback and extract
+    // progress percentage if present.
+    auto processLine = [&](const std::string& line, bool isErr) {
+        std::string trimmed = line;
+        rstripCarriageReturn(trimmed);
+        if (trimmed.empty()) return;
+        if (lineCb_) lineCb_(trimmed, isErr);
+        if (progressCb_) {
+            std::smatch m;
+            if (std::regex_search(trimmed, m, percentRe)) {
+                int p = std::stoi(m[1].str());
+                if (p != lastPercent && p >= 0 && p <= 100) {
+                    lastPercent = p;
+                    progressCb_(p);
+                }
+            }
+        }
+    };
+
     auto drain = [&](HANDLE h, bool isErr) {
         char  buf[4096];
         DWORD bytesRead = 0;
         std::string partial;
+        HANDLE procH = nullptr;
+        {
+            std::lock_guard<std::mutex> lk(handleMtx_);
+            procH = static_cast<HANDLE>(processHandle_);
+        }
         while (!cancel_.load()) {
             DWORD avail = 0;
             if (!PeekNamedPipe(h, nullptr, 0, nullptr, &avail, nullptr)) break;
             if (avail == 0) {
-                DWORD waitRes = WaitForSingleObject(processHandle_, 50);
+                DWORD waitRes = WaitForSingleObject(procH, 50);
                 if (waitRes == WAIT_OBJECT_0) {
                     // Process ended — drain remaining bytes.
                     if (PeekNamedPipe(h, nullptr, 0, nullptr, &avail, nullptr) && avail > 0) {
@@ -145,22 +175,19 @@ void ProcessRunner::run() {
                 buf[bytesRead] = '\0';
                 (isErr ? errBuf : outBuf).append(buf, bytesRead);
                 partial.append(buf, bytesRead);
+                // Parse complete lines from the accumulated partial buffer.
+                size_t pos = 0;
+                size_t nl;
+                while ((nl = partial.find('\n', pos)) != std::string::npos) {
+                    processLine(partial.substr(pos, nl - pos), isErr);
+                    pos = nl + 1;
+                }
+                if (pos > 0) partial = partial.substr(pos);
             }
         }
         // Flush any remaining partial line
         if (!partial.empty()) {
-            rstripCarriageReturn(partial);
-            if (lineCb_) lineCb_(partial, isErr);
-            if (progressCb_) {
-                std::smatch m;
-                if (std::regex_search(partial, m, percentRe)) {
-                    int p = std::stoi(m[1].str());
-                    if (p != lastPercent && p >= 0 && p <= 100) {
-                        lastPercent = p;
-                        progressCb_(p);
-                    }
-                }
-            }
+            processLine(partial, isErr);
         }
     };
 
@@ -172,11 +199,14 @@ void ProcessRunner::run() {
     errThread.join();
 
     DWORD exitCode = 0;
-    GetExitCodeProcess(processHandle_, &exitCode);
-    CloseHandle(processHandle_);
+    {
+        std::lock_guard<std::mutex> lk(handleMtx_);
+        GetExitCodeProcess(processHandle_, &exitCode);
+        CloseHandle(processHandle_);
+        processHandle_ = nullptr;
+    }
     CloseHandle(outP.read);
     CloseHandle(errP.read);
-    processHandle_ = nullptr;
 
     running_ = false;
 
@@ -195,6 +225,7 @@ void ProcessRunner::wait() {
 
 void ProcessRunner::cancel() {
     cancel_ = true;
+    std::lock_guard<std::mutex> lk(handleMtx_);
     HANDLE h = static_cast<HANDLE>(processHandle_);
     if (h) TerminateProcess(h, 1);
 }

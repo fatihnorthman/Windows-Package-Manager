@@ -25,7 +25,7 @@ struct NavItem {
 constexpr NavItem kItems[] = {
     { ScreenId::Discover,  mdl2::Search,    keys::nav_discover,  nullptr },
     { ScreenId::Installed, mdl2::Apps,      keys::nav_installed, nullptr },
-    { ScreenId::Updates,   mdl2::Update,    keys::nav_updates,   "5"   },
+    { ScreenId::Updates,   mdl2::Update,    keys::nav_updates,   nullptr },  // badge set dynamically
     { ScreenId::Tasks,     mdl2::CheckMark, keys::nav_tasks,     nullptr },
     { ScreenId::Settings,  mdl2::Settings,  keys::nav_settings,  nullptr },
 };
@@ -107,6 +107,22 @@ void Sidebar::draw(Renderer& r, AppState& state, const InputState& input) {
             r.drawText(buf, { itemRect.x + itemRect.w - bw - 8, itemRect.y + 12, bw, 18 },
                        isActive ? theme::COL_ON_PRIMARY_CONTAINER : theme::COL_ON_SURFACE_VARIANT,
                        11.0f, Renderer::Bold, true, true);
+        }
+
+        // Dynamic badge for Updates tab: show the count of upgradable packages.
+        if (item.id == ScreenId::Updates) {
+            std::lock_guard<std::mutex> lk(state.mtx);
+            int count = static_cast<int>(state.upgradable.size());
+            if (count > 0) {
+                char buf[8];
+                std::snprintf(buf, sizeof(buf), "%d", count);
+                float bw = (count >= 100) ? 32.0f : 24.0f;
+                r.fillRoundedRect({ itemRect.x + itemRect.w - bw - 8, itemRect.y + 9, bw, 22 },
+                                  isActive ? 0x33FFFFFF : theme::COL_SURFACE_CONTAINER_HIGH, 11.0f);
+                r.drawText(buf, { itemRect.x + itemRect.w - bw - 8, itemRect.y + 12, bw, 18 },
+                           isActive ? theme::COL_ON_PRIMARY_CONTAINER : theme::COL_ON_SURFACE_VARIANT,
+                           11.0f, Renderer::Bold, true, true);
+            }
         }
     }
 }

@@ -43,6 +43,10 @@ const std::unordered_map<std::string, std::string> en = {
     {"discover_btn_install",   "Install"},
     {"discover_btn_installing", "Installing..."},
 
+    {"installed_btn_uninstall",     "Uninstall"},
+    {"installed_btn_uninstalling",  "Uninstalling..."},
+    {"installed_btn_uninstall_done", "Removed"},
+
     {"tasks_title",        "Active Tasks & Queue"},
     {"tasks_subtitle",     "Live status of all running, queued, and completed operations."},
     {"tasks_empty",        "The task queue is empty."},
@@ -72,6 +76,9 @@ const std::unordered_map<std::string, std::string> en = {
 
     {"footer_summary",     "Pending: %d   Active: %d   Done: %d"},
     {"footer_scan_complete", "Background scan complete: %d updates found"},
+    {"footer_winget_ok",    "Winget: OK"},
+    {"footer_scoop_ok",     "Scoop: OK"},
+    {"footer_choco_ok",     "Choco: OK"},
     {"footer_status_idle", "System Status: Idle"},
     {"top_search_ph",      "Search packages, settings..."},
 };
@@ -111,6 +118,10 @@ const std::unordered_map<std::string, std::string> tr = {
     {"discover_btn_install",   "Kur"},
     {"discover_btn_installing", "Kuruluyor..."},
 
+    {"installed_btn_uninstall",     "Kaldir"},
+    {"installed_btn_uninstalling",  "Kaldiriliyor..."},
+    {"installed_btn_uninstall_done", "Kaldirildi"},
+
     {"tasks_title",        "Aktif Gorevler ve Kuyruk"},
     {"tasks_subtitle",     "Calisan, kuyrukta ve tamamlanan tum islemlerin canli durumu."},
     {"tasks_empty",        "Gorev kuyrugu bos."},
@@ -140,6 +151,9 @@ const std::unordered_map<std::string, std::string> tr = {
 
     {"footer_summary",     "Bekleyen: %d   Aktif: %d   Tamamlanan: %d"},
     {"footer_scan_complete", "Arkaplan taramasi tamam: %d guncelleme bulundu"},
+    {"footer_winget_ok",    "Winget: OK"},
+    {"footer_scoop_ok",     "Scoop: OK"},
+    {"footer_choco_ok",     "Choco: OK"},
     {"footer_status_idle", "Sistem Durumu: Bosta"},
     {"top_search_ph",      "Paket, ayar ara..."},
 };

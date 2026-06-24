@@ -62,6 +62,7 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> cancel_{false};
     std::thread       worker_;
+    std::mutex        handleMtx_;               // guards processHandle_
     void*             processHandle_ = nullptr; // HANDLE
 };
 

@@ -96,7 +96,9 @@ void TaskQueue::workerLoop() {
             ++active_;
 
             if (auto* slot = findSlot(t.id)) {
-                slot->state    = (t.action == TaskAction::Upgrade ? InstallState::Updating : InstallState::Installing);
+                slot->state    = (t.action == TaskAction::Upgrade   ? InstallState::Updating
+                               : t.action == TaskAction::Uninstall ? InstallState::Installing
+                               :                                     InstallState::Installing);
                 slot->progress = 0;
                 t = *slot;
             }

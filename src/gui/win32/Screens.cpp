@@ -390,12 +390,16 @@ void renderInstalled(Renderer& r, AppState& state, BackendBridge& bridge,
         r.drawText(t(keys::installed_empty), { x, sy + 60, w, 30 },
                    theme::COL_ON_SURFACE_VARIANT, 13.0f, Renderer::Regular);
     } else {
-        constexpr float kRowStride = 50.0f;   // logo (36) + padding
+        const float kRowStride = 50.0f;   // logo (36) + padding
         float listY = sy + 60;
         float listH = std::max(0.0f, h - (listY - y) - 8.0f);
         int   total   = (int)state.installed.size();
         int   visible = std::max(1, (int)(listH / kRowStride));
         int   offset  = clampScrollOffset(state, ScreenId::Installed, total, visible);
+
+        // Snapshot tasks once for the entire list draw to match
+        // each installed row to its uninstall state.
+        auto taskSnap = bridge.snapshotTasks();
 
         for (int i = 0; i < visible && (offset + i) < total; ++i) {
             const auto& p = state.installed[offset + i];
@@ -430,9 +434,73 @@ void renderInstalled(Renderer& r, AppState& state, BackendBridge& bridge,
             r.drawText(p.id, { logoRect.x + logoRect.w + 12, row.y + 26, 280, 14 },
                        theme::COL_ON_SURFACE_VARIANT, 11.0f, Renderer::Regular);
 
-            // Version (right-aligned)
-            r.drawText(p.installedVersion, { row.x + row.w - 160, row.y + 14, 140, 16 },
+            // Version (right-aligned, shifted left to make room for Uninstall button)
+            r.drawText(p.installedVersion, { row.x + row.w - 260, row.y + 14, 140, 16 },
                        theme::COL_ON_SURFACE_VARIANT, 12.0f, Renderer::Mono, true, true);
+
+            // Uninstall button
+            RectF ubtn{ row.x + row.w - 100, row.y + 8, 90, 28 };
+
+            // Check if this package has an in-flight uninstall task.
+            bool       inflight     = false;
+            int        liveProgress = 0;
+            InstallState liveState  = InstallState::Unknown;
+            {
+                std::lock_guard<std::mutex> lk(state.mtx);
+                for (const auto& key : state.inFlight) {
+                    if (key.id == p.id && key.manager == p.manager) {
+                        inflight = true;
+                        break;
+                    }
+                }
+            }
+            for (const auto& tt : taskSnap) {
+                if (tt.package.id == p.id && tt.package.manager == p.manager
+                    && tt.action == TaskAction::Uninstall) {
+                    liveProgress = tt.progress;
+                    liveState    = tt.state;
+                    break;
+                }
+            }
+
+            if (inflight
+                || liveState == InstallState::Installing
+                || liveState == InstallState::Updating) {
+                r.fillRoundedRect(ubtn, theme::COL_SURFACE_CONTAINER_HIGHEST, 4.0f);
+                if (liveProgress > 0) {
+                    float frac = std::clamp(liveProgress, 0, 100) / 100.0f;
+                    r.fillRoundedRect({ ubtn.x, ubtn.y, ubtn.w * frac, ubtn.h },
+                                      theme::COL_ERROR, 4.0f);
+                    char pct[16];
+                    std::snprintf(pct, sizeof(pct), "%d%%", liveProgress);
+                    r.drawText(pct, ubtn, theme::COL_ON_SURFACE,
+                               10.0f, Renderer::Bold, true, true);
+                } else {
+                    r.fillRoundedRect({ ubtn.x, ubtn.y, ubtn.w * 0.5f, ubtn.h },
+                                      theme::COL_ERROR, 4.0f);
+                    r.drawText(t(keys::installed_btn_uninstalling), ubtn,
+                               theme::COL_ON_SURFACE,
+                               10.0f, Renderer::Bold, true, true);
+                }
+            } else if (liveState == InstallState::Installed) {
+                // "Installed" in TaskQueue means "completed successfully"
+                // for uninstall that means "removed".
+                r.drawText(t(keys::installed_btn_uninstall_done), ubtn,
+                           theme::COL_SUCCESS,
+                           11.0f, Renderer::Bold, true, true);
+            } else {
+                bool hov = input.mouseInside
+                         && RectContains(ubtn, input.mouse.x, input.mouse.y);
+                // Uninstall uses a subtle danger styling (error color border).
+                uint32_t bg = hov ? 0x33E81123 : 0;
+                uint32_t bd = theme::COL_ERROR;
+                if (bg) r.fillRoundedRect(ubtn, bg, 6.0f);
+                r.strokeRect(ubtn, bd, 1.0f, 6.0f);
+                r.drawText(t(keys::installed_btn_uninstall), ubtn,
+                           theme::COL_ERROR, 12.0f, Renderer::Bold, true, true);
+                pushRect(ubtn, 400,
+                         std::string("uninstall:") + std::string(toString(p.manager)) + ":" + p.id);
+            }
         }
         drawScrollbar(r, x + w - 4.0f, listY, listH, offset, total, visible);
     }
@@ -498,6 +566,10 @@ void renderUpdates(Renderer& r, AppState& state, BackendBridge& bridge,
     int   total   = (int)state.upgradable.size();
     int   visible = std::max(1, (int)(listH / kRowStride));
     int   offset  = clampScrollOffset(state, ScreenId::Updates, total, visible);
+
+    // Snapshot tasks once before the loop — avoids locking the queue
+    // mutex on every row iteration (previously 200 pkgs * 60fps = 12000/sec).
+    auto updatesTaskSnap = bridge.snapshotTasks();
 
     for (int i = 0; i < visible && (offset + i) < total; ++i) {
         const auto& p = state.upgradable[offset + i];
@@ -568,7 +640,7 @@ void renderUpdates(Renderer& r, AppState& state, BackendBridge& bridge,
                 if (key.id == p.id && key.manager == p.manager) { inflight = true; break; }
             }
         }
-        for (const auto& tt : bridge.snapshotTasks()) {
+        for (const auto& tt : updatesTaskSnap) {
             if (tt.package.id == p.id) {
                 liveProgress = tt.progress;
                 liveState    = tt.state;
@@ -777,6 +849,20 @@ bool ScreenHitTest(int x, int y, AppState& state, BackendBridge& bridge) {
                     }
                     return true;
                 }
+                case 400: {  // uninstall a specific package.
+                            // payload format: "uninstall:<manager>:<id>"
+                            auto p1 = r.payload.find(':');
+                            auto p2 = r.payload.find(':', p1 == std::string::npos ? 0 : p1 + 1);
+                            if (p1 == std::string::npos || p2 == std::string::npos) return true;
+                            std::string manager = r.payload.substr(p1 + 1, p2 - p1 - 1);
+                            std::string id      = r.payload.substr(p2 + 1);
+                            PackageInfo pkg;
+                            pkg.id      = id;
+                            pkg.name    = id;
+                            pkg.manager = managerFromString(manager);
+                            bridge.enqueueUninstallOne(pkg);
+                            return true;
+                        }
             }
         }
     }
