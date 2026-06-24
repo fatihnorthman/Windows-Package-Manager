@@ -20,6 +20,19 @@ std::wstring utf8ToWide(const std::string& s) {
 
 uint64_t brushKey(uint32_t color) { return static_cast<uint64_t>(color); }
 
+uint64_t gradKey(uint32_t a, uint32_t b) {
+    return (static_cast<uint64_t>(a) << 32) | static_cast<uint64_t>(b);
+}
+
+D2D1_COLOR_F toColorF(uint32_t c) {
+    D2D1_COLOR_F f;
+    f.a = ((c >> 24) & 0xFF) / 255.0f;
+    f.r = ((c >> 16) & 0xFF) / 255.0f;
+    f.g = ((c >>  8) & 0xFF) / 255.0f;
+    f.b = ( c        & 0xFF) / 255.0f;
+    return f;
+}
+
 uint64_t formatKey(float size, Renderer::FontStyle s) {
     return (static_cast<uint64_t>(*reinterpret_cast<uint32_t*>(&size)) << 8) | static_cast<uint8_t>(s);
 }
@@ -82,9 +95,11 @@ bool Renderer::createDeviceResources() {
         hwndRT_.GetAddressOf());
     if (FAILED(hr)) return false;
 
-    renderTarget_ = hwndRT_;  // implicit upcast to base class for drawing
+    renderTarget_ = hwndRT_;
     brushes_.clear();
     formats_.clear();
+    linearBrushes_.clear();
+    radialBrushes_.clear();
     return true;
 }
 
@@ -93,6 +108,8 @@ void Renderer::discardDeviceResources() {
     hwndRT_.Reset();
     brushes_.clear();
     formats_.clear();
+    linearBrushes_.clear();
+    radialBrushes_.clear();
 }
 
 bool Renderer::resize(UINT w, UINT h) {
@@ -106,9 +123,6 @@ bool Renderer::resize(UINT w, UINT h) {
 
 void Renderer::beginFrame() {
     if (!renderTarget_) return;
-    // Apply DPI scaling once per frame so all geometry passed to fill/draw/stroke
-    // is in DIPs (logical pixels) instead of raw device pixels. Without this,
-    // high-DPI displays (125%/150%/200%) render the entire UI too small.
     renderTarget_->SetTransform(D2D1::Matrix3x2F::Scale(dpiScale_, dpiScale_));
     renderTarget_->BeginDraw();
 }
@@ -120,8 +134,6 @@ void Renderer::endFrame() {
         discardDeviceResources();
         createDeviceResources();
     } else {
-        // Reset so a stale transform doesn't leak into the next frame if
-        // beginFrame was skipped (e.g. first paint after device recreation).
         renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
     }
 }
@@ -166,6 +178,50 @@ ComPtr<IDWriteTextFormat> Renderer::getFormat(float size, FontStyle style) {
     if (FAILED(hr)) return nullptr;
     formats_[key] = fmt;
     return fmt;
+}
+
+ComPtr<ID2D1LinearGradientBrush> Renderer::getLinearBrush(uint32_t a, uint32_t b) {
+    auto key = gradKey(a, b);
+    auto it = linearBrushes_.find(key);
+    if (it != linearBrushes_.end()) return it->second;
+    if (!renderTarget_) return nullptr;
+    D2D1_GRADIENT_STOP stops[2] = {
+        { 0.0f, toColorF(a) },
+        { 1.0f, toColorF(b) },
+    };
+    ComPtr<ID2D1GradientStopCollection> coll;
+    HRESULT hr = renderTarget_->CreateGradientStopCollection(stops, 2, coll.GetAddressOf());
+    if (FAILED(hr)) return nullptr;
+    ComPtr<ID2D1LinearGradientBrush> brush;
+    hr = renderTarget_->CreateLinearGradientBrush(
+        D2D1::LinearGradientBrushProperties(
+            D2D1::Point2F(0, 0), D2D1::Point2F(0, 1)),
+        coll.Get(), brush.GetAddressOf());
+    if (FAILED(hr)) return nullptr;
+    linearBrushes_[key] = brush;
+    return brush;
+}
+
+ComPtr<ID2D1RadialGradientBrush> Renderer::getRadialBrush(uint32_t a, uint32_t b) {
+    auto key = gradKey(a, b);
+    auto it = radialBrushes_.find(key);
+    if (it != radialBrushes_.end()) return it->second;
+    if (!renderTarget_) return nullptr;
+    D2D1_GRADIENT_STOP stops[2] = {
+        { 0.0f, toColorF(a) },
+        { 1.0f, toColorF(b) },
+    };
+    ComPtr<ID2D1GradientStopCollection> coll;
+    HRESULT hr = renderTarget_->CreateGradientStopCollection(stops, 2, coll.GetAddressOf());
+    if (FAILED(hr)) return nullptr;
+    ComPtr<ID2D1RadialGradientBrush> brush;
+    hr = renderTarget_->CreateRadialGradientBrush(
+        D2D1::RadialGradientBrushProperties(
+            D2D1::Point2F(0, 0), D2D1::Point2F(0, 0), 1, 1),
+        coll.Get(), brush.GetAddressOf());
+    if (FAILED(hr)) return nullptr;
+    radialBrushes_[key] = brush;
+    return brush;
 }
 
 void Renderer::fillRect(const RectF& r, uint32_t color, float radius) {
@@ -224,6 +280,58 @@ void Renderer::drawText(const std::wstring& text, const RectF& rect, uint32_t co
 void Renderer::drawText(const std::string& text, const RectF& rect, uint32_t color,
                         float fontSize, FontStyle style, bool centerX, bool centerY) {
     drawText(utf8ToWide(text), rect, color, fontSize, style, centerX, centerY);
+}
+
+void Renderer::fillRectLinearV(const RectF& r, uint32_t colorTop, uint32_t colorBottom,
+                               float radius) {
+    if (!renderTarget_) return;
+    auto brush = getLinearBrush(colorTop, colorBottom);
+    if (!brush) return;
+    brush->SetStartPoint(D2D1::Point2F(r.x, r.y));
+    brush->SetEndPoint(D2D1::Point2F(r.x, r.y + r.h));
+    if (radius > 0.0f) {
+        renderTarget_->FillRoundedRectangle(
+            D2D1::RoundedRect(D2D1::RectF(r.x, r.y, r.x + r.w, r.y + r.h),
+                              radius, radius),
+            brush.Get());
+    } else {
+        renderTarget_->FillRectangle(
+            D2D1::RectF(r.x, r.y, r.x + r.w, r.y + r.h), brush.Get());
+    }
+}
+
+void Renderer::fillRectLinearH(const RectF& r, uint32_t colorLeft, uint32_t colorRight,
+                               float radius) {
+    if (!renderTarget_) return;
+    auto brush = getLinearBrush(colorLeft, colorRight);
+    if (!brush) return;
+    brush->SetStartPoint(D2D1::Point2F(r.x, r.y));
+    brush->SetEndPoint(D2D1::Point2F(r.x + r.w, r.y));
+    if (radius > 0.0f) {
+        renderTarget_->FillRoundedRectangle(
+            D2D1::RoundedRect(D2D1::RectF(r.x, r.y, r.x + r.w, r.y + r.h),
+                              radius, radius),
+            brush.Get());
+    } else {
+        renderTarget_->FillRectangle(
+            D2D1::RectF(r.x, r.y, r.x + r.w, r.y + r.h), brush.Get());
+    }
+}
+
+void Renderer::fillRectRadial(const RectF& r, float cx, float cy, float radiusFactor,
+                              uint32_t colorCenter, uint32_t colorEdge) {
+    if (!renderTarget_) return;
+    auto brush = getRadialBrush(colorCenter, colorEdge);
+    if (!brush) return;
+    float rcx = r.x + r.w * cx;
+    float rcy = r.y + r.h * cy;
+    float rad = std::max(r.w, r.h) * radiusFactor;
+    brush->SetCenter(D2D1::Point2F(rcx, rcy));
+    brush->SetGradientOriginOffset(D2D1::Point2F(0, 0));
+    brush->SetRadiusX(rad);
+    brush->SetRadiusY(rad);
+    renderTarget_->FillRectangle(
+        D2D1::RectF(r.x, r.y, r.x + r.w, r.y + r.h), brush.Get());
 }
 
 } // namespace pm::gui::win32

@@ -17,6 +17,25 @@ constexpr uint32_t COL_SURFACE_LOWEST          = 0xFF0E0E0E;  // #0e0e0e
 constexpr uint32_t COL_SURFACE_DIM             = 0xFF131313;  // #131313
 constexpr uint32_t COL_SURFACE_BRIGHT          = 0xFF393939;  // #393939
 
+// Gradient stops — used for ambient background tints and surface depth.
+// BG: very subtle warm-dark top to cooler-dark bottom.
+constexpr uint32_t COL_BG_GRAD_TOP             = 0xFF181410;  // warm-tinted near-black
+constexpr uint32_t COL_BG_GRAD_BOT             = 0xFF0C0E12;  // cool-tinted near-black
+// Card: gentle vertical lift, slightly lighter at the top edge.
+constexpr uint32_t COL_CARD_GRAD_TOP           = 0xFF242220;  // +4 over surface_container
+constexpr uint32_t COL_CARD_GRAD_BOT           = 0xFF1C1A19;  // -4 under surface_container
+// Sidebar: ambient depth on the right edge so the sidebar reads as a
+// recessed column when the content panel sits flush against it.
+constexpr uint32_t COL_SIDEBAR_GRAD_L          = 0xFF1A1919;
+constexpr uint32_t COL_SIDEBAR_GRAD_R          = 0xFF222020;
+// Top bar: subtle primary-tinted highlight on the top edge fading down.
+constexpr uint32_t COL_TOPBAR_GRAD_TOP         = 0xFF1F2026;  // +3 over surface, +blue tint
+constexpr uint32_t COL_TOPBAR_GRAD_BOT         = 0xFF1A1919;  // = surface
+// Ambient halo (radial) used behind hero areas and the empty-state
+// surfaces — gives the app a soft "lit from above" feel.
+constexpr uint32_t COL_HALO_CENTER              = 0x140078D4;  // primary @ 8% alpha
+constexpr uint32_t COL_HALO_EDGE                = 0x00000000;  // transparent
+
 // Text
 constexpr uint32_t COL_ON_SURFACE              = 0xFFE5E2E1;  // #e5e2e1
 constexpr uint32_t COL_ON_SURFACE_VARIANT      = 0xFFC0C7D4;  // #c0c7d4

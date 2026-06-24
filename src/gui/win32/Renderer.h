@@ -38,6 +38,20 @@ public:
     void fillRoundedRect(const RectF& r, uint32_t color, float radius);
     void drawLine(Vec2 from, Vec2 to, uint32_t color, float strokeWidth = 1.0f);
 
+    // ---- Gradients ----
+    // Vertical (top -> bottom) and horizontal (left -> right) linear
+    // gradients. Gradient brushes are cached by their (top, bottom) or
+    // (left, right) color pair and re-pointed to the target rect on
+    // each draw, so cost is O(1) per call after the first hit.
+    void fillRectLinearV(const RectF& r, uint32_t colorTop, uint32_t colorBottom,
+                         float radius = 0.0f);
+    void fillRectLinearH(const RectF& r, uint32_t colorLeft, uint32_t colorRight,
+                         float radius = 0.0f);
+    // Radial gradient with the center at (cx, cy) relative to r, fading
+    // out to the edges of r. Used for ambient highlights.
+    void fillRectRadial(const RectF& r, float cx, float cy, float radiusFactor,
+                        uint32_t colorCenter, uint32_t colorEdge);
+
     // ---- Text ----
     enum FontStyle { Regular = 0, Bold = 1, Mono = 2, Icon = 3 };
     void drawText(const std::wstring& text, const RectF& rect, uint32_t color,
@@ -66,9 +80,13 @@ private:
 
     ComPtr<ID2D1SolidColorBrush> getBrush(uint32_t color);
     ComPtr<IDWriteTextFormat>   getFormat(float size, FontStyle style);
+    ComPtr<ID2D1LinearGradientBrush> getLinearBrush(uint32_t a, uint32_t b);
+    ComPtr<ID2D1RadialGradientBrush> getRadialBrush(uint32_t a, uint32_t b);
 
-    std::unordered_map<uint64_t, ComPtr<ID2D1SolidColorBrush>> brushes_;
-    std::unordered_map<uint64_t, ComPtr<IDWriteTextFormat>>   formats_;
+    std::unordered_map<uint64_t, ComPtr<ID2D1SolidColorBrush>>       brushes_;
+    std::unordered_map<uint64_t, ComPtr<IDWriteTextFormat>>           formats_;
+    std::unordered_map<uint64_t, ComPtr<ID2D1LinearGradientBrush>>   linearBrushes_;
+    std::unordered_map<uint64_t, ComPtr<ID2D1RadialGradientBrush>>   radialBrushes_;
 
     HWND    hwnd_     = nullptr;
     float   dpiScale_ = 1.0f;

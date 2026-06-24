@@ -81,6 +81,12 @@ void pushRect(const RectF& r, int id, const std::string& payload = "") {
 // ---- helpers ----
 void drawHeroHeader(Renderer& r, float x, float y, float w,
                     const std::string& title, const std::string& subtitle) {
+    // A soft primary-tinted halo behind the title. The radial gradient
+    // is offset to the left so it reads as if light is coming from
+    // off-screen left, lifting the title out of the background.
+    r.fillRectRadial({ x - 24, y - 16, w * 0.6f, 160.0f },
+                     0.35f, 0.5f, 0.7f,
+                     theme::COL_HALO_CENTER, theme::COL_HALO_EDGE);
     r.drawText(title, { x, y, w, 36 }, theme::COL_ON_SURFACE, 26.0f, Renderer::Bold);
     r.drawText(subtitle, { x, y + 38, w, 22 }, theme::COL_ON_SURFACE_VARIANT,
                13.0f, Renderer::Regular);
@@ -159,21 +165,22 @@ uint32_t darken(uint32_t c, float amt) {
 }
 
 void drawLogoPlaceholder(Renderer& r, const RectF& rect, const std::string& id, PackageManager m) {
-    // Layered avatar: a solid darker base, the hashed brand color on top,
-    // and a top-edge highlight to fake a soft top-light. The two-letter
-    // abbreviation sits in the center for a clean monogram look.
+    // Layered avatar: dark base, brand color on top, glossy highlight,
+    // and outline. The highlight is a radial gradient anchored at the
+    // top-left corner for a glassy "lit from above" finish.
     uint32_t hash = packageHash(id);
     uint32_t base = (m == PackageManager::Winget)     ? 0xFF0078D4u
                   : (m == PackageManager::Scoop)      ? 0xFFBC5B00u
                   : (m == PackageManager::Chocolatey) ? 0xFF6B4423u
                   :                                       avatarColor(hash);
 
-    // Base fill
+    // Base + brand top half
     r.fillRoundedRect(rect, darken(base, 0.25f), 8.0f);
-    // Top accent (slightly lighter)
     r.fillRoundedRect({ rect.x, rect.y, rect.w, rect.h * 0.5f },
                       base, 8.0f);
-    // Subtle outline so the avatar reads against any background
+    // Glossy highlight (radial, top-left)
+    r.fillRectRadial(rect, 0.25f, 0.2f, 0.7f, 0x66FFFFFF, 0x00FFFFFF);
+    // Outline
     r.strokeRect(rect, darken(base, 0.45f), 1.0f, 8.0f);
 
     std::string ab = packageAbbrev(id);
@@ -182,15 +189,20 @@ void drawLogoPlaceholder(Renderer& r, const RectF& rect, const std::string& id, 
 
 void drawButton(Renderer& r, const RectF& rect, const std::string& label,
                 bool primary, const InputState& input, bool hover) {
-    uint32_t bg = primary ? theme::COL_PRIMARY_CONTAINER : 0;  // transparent
+    uint32_t bg = primary ? theme::COL_PRIMARY_CONTAINER : 0;
     uint32_t bd = primary ? 0 : theme::COL_PRIMARY;
     uint32_t tx = primary ? theme::COL_ON_PRIMARY_CONTAINER : theme::COL_PRIMARY;
     if (hover && !primary) bg = 0x330078D4;
-    if (hover && primary) {
-        // subtle brighten
-        bg = 0xFF0086EE;
+    if (hover && primary)   bg = 0xFF0086EE;
+    if (bg) {
+        // Vertical gradient for the primary / hover state — adds depth
+        // and makes the button look tappable.
+        uint32_t top = primary
+            ? (hover ? 0xFF0F95FFu : 0xFF0086EEu)
+            : 0xFF1A8ADBu;
+        uint32_t bot = bg;
+        r.fillRectLinearV(rect, top, bot, 6.0f);
     }
-    if (bg) r.fillRoundedRect(rect, bg, 6.0f);
     if (bd) r.strokeRect(rect, bd, 1.0f, 6.0f);
     r.drawText(label, rect, tx, 12.0f, Renderer::Bold, true, true);
 }
@@ -286,7 +298,15 @@ void renderInstalled(Renderer& r, AppState& state, BackendBridge& bridge,
             const auto& p = state.installed[offset + i];
             float ry = listY + i * kRowStride;
             RectF row{ x, ry, w - 12.0f, 44.0f };
-            r.fillRoundedRect(row, theme::COL_SURFACE_CONTAINER, theme::CARD_RADIUS);
+            r.fillRectLinearV(row,
+                              theme::COL_CARD_GRAD_TOP, theme::COL_CARD_GRAD_BOT,
+                              theme::CARD_RADIUS);
+            bool rowHover = input.mouseInside
+                         && input.mouse.x >= row.x && input.mouse.x <= row.x + row.w
+                         && input.mouse.y >= row.y && input.mouse.y <= row.y + row.h;
+            if (rowHover) {
+                r.fillRectLinearV(row, 0x14FFFFFF, 0x06FFFFFF, theme::CARD_RADIUS);
+            }
             r.strokeRect(row, theme::COL_OUTLINE_VARIANT, 1.0f, theme::CARD_RADIUS);
 
             // 3px left accent stripe in the source's brand color.
@@ -294,8 +314,8 @@ void renderInstalled(Renderer& r, AppState& state, BackendBridge& bridge,
                            : (p.manager == PackageManager::Scoop)      ? theme::COL_TERTIARY
                            : (p.manager == PackageManager::Chocolatey) ? 0xFF6B4423u
                            :                                            theme::COL_OUTLINE;
-            r.fillRoundedRect({ row.x, row.y + 6, 3.0f, row.h - 12.0f },
-                              stripe, 1.5f);
+            r.fillRectLinearV({ row.x, row.y + 6, 3.0f, row.h - 12.0f },
+                              stripe, stripe, 1.5f);
 
             // Logo
             RectF logoRect{ row.x + 18, row.y + 4, 36, 36 };
@@ -380,12 +400,29 @@ void renderUpdates(Renderer& r, AppState& state, BackendBridge& bridge,
         const auto& p = state.upgradable[offset + i];
         float yRow = rowY + i * kRowStride;
 
-        // Card background — slightly elevated surface with a thin
-        // outline. The left edge gets a 3px accent stripe in the
-        // source's brand color so rows scan as belonging together
-        // even before you read the badge column.
+        // Card background — gentle top-to-bottom gradient that fakes a
+        // small amount of light from above, plus a 1px outline. The
+        // left edge gets a 3px accent stripe in the source's brand
+        // color so rows scan as belonging together even before you
+        // read the badge column.
         RectF rowBg{ x, yRow, w - 12.0f, kRowH };
-        r.fillRoundedRect(rowBg, theme::COL_SURFACE_CONTAINER, theme::CARD_RADIUS);
+        r.fillRectLinearV(rowBg,
+                          theme::COL_CARD_GRAD_TOP, theme::COL_CARD_GRAD_BOT,
+                          theme::CARD_RADIUS);
+
+        // Hover highlight — a subtle vertical gradient overlay applied
+        // on top of the base card. Cheap visual feedback that the row
+        // is interactive without animating anything.
+        bool rowHover = input.mouseInside
+                     && input.mouse.x >= rowBg.x && input.mouse.x <= rowBg.x + rowBg.w
+                     && input.mouse.y >= rowBg.y && input.mouse.y <= rowBg.y + rowBg.h;
+        if (rowHover) {
+            r.fillRectLinearV(rowBg,
+                              0x14FFFFFF,  // white @ ~8% alpha
+                              0x06FFFFFF,  // white @ ~2% alpha
+                              theme::CARD_RADIUS);
+        }
+
         r.strokeRect(rowBg, theme::COL_OUTLINE_VARIANT, 1.0f, theme::CARD_RADIUS);
 
         // Left accent stripe (3px) in the source's brand color.
@@ -393,8 +430,8 @@ void renderUpdates(Renderer& r, AppState& state, BackendBridge& bridge,
                        : (p.manager == PackageManager::Scoop)      ? theme::COL_TERTIARY
                        : (p.manager == PackageManager::Chocolatey) ? 0xFF6B4423u
                        :                                            theme::COL_OUTLINE;
-        r.fillRoundedRect({ rowBg.x, rowBg.y + 6, 3.0f, rowBg.h - 12.0f },
-                          stripe, 1.5f);
+        r.fillRectLinearV({ rowBg.x, rowBg.y + 6, 3.0f, rowBg.h - 12.0f },
+                          stripe, stripe, 1.5f);
 
         // Col 0: Logo + name + publisher
         RectF logoRect{ x + 22, yRow + (kRowH - kLogoSize) / 2.0f, kLogoSize, kLogoSize };

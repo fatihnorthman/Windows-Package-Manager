@@ -87,8 +87,11 @@ void TopBar::draw(Renderer& r, AppState& state, const InputState& input,
     float barW = windowW - kTopBarX;
 
     // Surface background — starts after the sidebar so the sidebar
-    // painting pass stays visible on the left.
-    r.fillRect({ kTopBarX, 0, barW, theme::TOPBAR_H }, theme::COL_SURFACE);
+    // painting pass stays visible on the left. Subtle vertical gradient
+    // gives the bar a slightly lit-from-above feel that ties into the
+    // primary accent line below.
+    r.fillRectLinearV({ kTopBarX, 0, barW, theme::TOPBAR_H },
+                      theme::COL_TOPBAR_GRAD_TOP, theme::COL_TOPBAR_GRAD_BOT);
 
     // 2px primary accent along the very top edge.
     r.fillRect({ kTopBarX, 0, barW, 2 }, theme::COL_PRIMARY_CONTAINER);
@@ -100,7 +103,10 @@ void TopBar::draw(Renderer& r, AppState& state, const InputState& input,
     float sx = kTopBarX + kPadX;
     float sy = kPadY;
     RectF sBox{ sx, sy, kSearchW, kSearchH };
-    r.fillRoundedRect(sBox, theme::COL_SURFACE_CONTAINER_HIGH, 8.0f);
+    r.fillRectLinearV(sBox,
+                      0xFF323232,  // slightly lighter top
+                      theme::COL_SURFACE_CONTAINER_HIGH,
+                      8.0f);
     r.strokeRect(sBox, theme::COL_OUTLINE_VARIANT, 1.0f, 8.0f);
     r.drawText(std::wstring(mdl2::Search), { sx + 14, sy + 9, 18, 18 },
                theme::COL_ON_SURFACE_VARIANT, 14.0f, Renderer::Icon);

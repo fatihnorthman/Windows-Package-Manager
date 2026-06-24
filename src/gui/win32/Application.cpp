@@ -231,6 +231,19 @@ void Application::renderFrame() {
     const float W = static_cast<float>(rc.right);
     const float H = static_cast<float>(rc.bottom);
 
+    // Ambient background — a very gentle warm-to-cool vertical fade
+    // instead of flat black. Sets the mood for the whole window before
+    // any UI surfaces paint over it.
+    renderer_.fillRectLinearV({ 0, 0, W, H },
+                              theme::COL_BG_GRAD_TOP, theme::COL_BG_GRAD_BOT);
+
+    // A soft primary-tinted halo behind the top-left corner, fading to
+    // transparent. Gives the impression of light spilling from the
+    // title bar across the rest of the window.
+    renderer_.fillRectRadial({ 0, 0, W, H * 0.6f },
+                             0.15f, 0.25f, 0.85f,
+                             theme::COL_HALO_CENTER, theme::COL_HALO_EDGE);
+
     AppState& state = bridge_.state();
 
     Sidebar::draw(renderer_, state, input_);

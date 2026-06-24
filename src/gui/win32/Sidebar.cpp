@@ -42,12 +42,16 @@ constexpr float kItemGap     = 4.0f;
 } // anonymous
 
 void Sidebar::draw(Renderer& r, AppState& state, const InputState& input) {
-    // Sidebar background — slightly lighter than main, like Stitch.
     RECT rcw; GetClientRect(r.hwnd(), &rcw);
-    r.fillRect({ 0, 0, kSidebarW, static_cast<float>(rcw.bottom) }, theme::COL_SURFACE);
+    float H = static_cast<float>(rcw.bottom);
+
+    // Sidebar background — left-to-right gradient that recedes slightly
+    // into shadow on the right edge, where the content panel meets it.
+    r.fillRectLinearH({ 0, 0, kSidebarW, H },
+                      theme::COL_SIDEBAR_GRAD_L, theme::COL_SIDEBAR_GRAD_R);
 
     // Right border separator
-    r.fillRect({ kSidebarW - 1, 0, 1, static_cast<float>(rcw.bottom) }, theme::COL_OUTLINE_VARIANT);
+    r.fillRect({ kSidebarW - 1, 0, 1, H }, theme::COL_OUTLINE_VARIANT);
 
     // App title (primary)
     r.drawText(t(keys::app_title), { kTitleX, kTitleY, kSidebarW - 32, 24 },
@@ -70,11 +74,19 @@ void Sidebar::draw(Renderer& r, AppState& state, const InputState& input) {
                         && input.mouse.y >= itemRect.y
                         && input.mouse.y <= itemRect.y + itemRect.h;
 
-        // Background
-        uint32_t bg = isActive ? theme::COL_PRIMARY_CONTAINER
-                     : isHover  ? theme::COL_SECONDARY_CONTAINER
-                     : 0;  // transparent
-        if (bg) r.fillRoundedRect(itemRect, bg, 8.0f);
+        // Background — vertical gradient on the active/hover item to
+        // give a sense of weight. Transparent (no draw) otherwise.
+        if (isActive) {
+            r.fillRectLinearV(itemRect,
+                              0xFF0086EE,  // slightly lighter top
+                              theme::COL_PRIMARY_CONTAINER,
+                              8.0f);
+        } else if (isHover) {
+            r.fillRectLinearV(itemRect,
+                              theme::COL_SECONDARY_CONTAINER,
+                              0xFF3A3938,
+                              8.0f);
+        }
 
         // Icon + label + (optional) badge
         uint32_t textColor = isActive ? theme::COL_ON_PRIMARY_CONTAINER : theme::COL_ON_SURFACE_VARIANT;
