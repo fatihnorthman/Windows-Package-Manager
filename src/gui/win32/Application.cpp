@@ -58,6 +58,27 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
 
+        case WM_CHAR: {
+            // Feed printable characters / backspace / Enter into the
+            // focused TextInput. Enter triggers the bound action
+            // (currently runSearch on the Discover query).
+            auto& s = g_app->bridge().state();
+            if (!s.searchInput.focused) return 0;
+            wchar_t wc = (wchar_t)wParam;
+            if (wc == L'\r' || wc == L'\n') {
+                g_app->bridge().runSearch(s.searchInput.text);
+            } else if (wc == L'\b') {
+                if (!s.searchInput.text.empty()) {
+                    s.searchInput.text.pop_back();
+                }
+            } else if (wc >= 32 && wc != 127) {
+                // Simple ASCII fast path; for the rest we just drop it.
+                char c = (char)wc;
+                s.searchInput.text += c;
+            }
+            return 0;
+        }
+
         case WM_LBUTTONDBLCLK: {
             // Double-click on the title bar region toggles maximize.
             POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
@@ -196,6 +217,16 @@ void Application::handleMouseUp(int x, int y) {
     RECT rc; GetClientRect(hwnd_, &rc);
     const float W = static_cast<float>(rc.right);
     const float H = static_cast<float>(rc.bottom);
+
+    // Focus management: clicking inside the currently-bound text-input
+    // box gives it focus; clicking outside releases it.
+    if (state.searchInput.boxValid) {
+        bool inside = x >= state.searchInput.boxX
+                   && x <= state.searchInput.boxX + state.searchInput.boxW
+                   && y >= state.searchInput.boxY
+                   && y <= state.searchInput.boxY + state.searchInput.boxH;
+        state.searchInput.focused = inside;
+    }
 
     if (auto btn = TopBar::hitTest(x, y, state, W); btn != TopBarButton::None) {
         switch (btn) {

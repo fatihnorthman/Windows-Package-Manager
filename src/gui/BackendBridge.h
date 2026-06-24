@@ -63,6 +63,21 @@ struct AppState {
     // WM_MOUSEWHEEL, consumed by Screens::draw. We keep one slot per screen
     // so navigating away and back doesn't lose the user's position.
     std::array<int, 5>               scrollOffset{0, 0, 0, 0, 0};
+
+    // Single-line text input. The Discover search box and the top-bar
+    // search both bind to this; whichever gets a click takes focus, and
+    // WM_CHAR feeds characters into the buffer. Pressing Enter triggers
+    // bridge.runSearch() with the current text.
+    struct TextInput {
+        std::string   text;
+        bool          focused = false;
+        // Geometry of the currently focused field, refreshed by the
+        // drawer each frame. Hit-test uses these to figure out whether
+        // a click landed in the field.
+        float         boxX = 0, boxY = 0, boxW = 0, boxH = 0;
+        bool          boxValid = false;
+    };
+    TextInput                        searchInput;
 };
 
 // BackendBridge owns the adapters and queue. UI calls into bridge methods;

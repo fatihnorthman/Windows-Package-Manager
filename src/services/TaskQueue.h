@@ -59,6 +59,7 @@ public:
 private:
     void workerLoop();
     void emit(const Task& t);
+    void emitLocked(const Task& t);   // caller already holds mtx_
     std::shared_ptr<IPackageAdapter> resolveAdapter(const Task& t) const;
 
     int                                  concurrency_;

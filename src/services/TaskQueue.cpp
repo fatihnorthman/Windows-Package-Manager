@@ -118,41 +118,41 @@ void TaskQueue::workerLoop() {
             continue;
         }
 
-        auto doneFlag = std::make_shared<std::promise<bool>>();
-        auto fut      = doneFlag->get_future();
+    auto doneFlag = std::make_shared<std::promise<bool>>();
+    auto fut      = doneFlag->get_future();
 
-        adapter->performAction(
-            t.package,
-            t.action,
-            [this, id = t.id](int percent) {
+    adapter->performAction(
+        t.package,
+        t.action,
+        [this, id = t.id](int percent) {
+            std::lock_guard<std::mutex> lk(mtx_);
+            if (auto* slot = [this, id]() -> Task* {
+                for (auto& x : all_) if (x.id == id) return &x;
+                return nullptr;
+            }()) {
+                if (percent > slot->progress) {
+                    slot->progress = percent;
+                    emitLocked(*slot);   // mtx_ is held, use the unlocked variant
+                }
+            }
+        },
+        [this, id = t.id, doneFlag](bool ok, std::string msg) {
+            {
                 std::lock_guard<std::mutex> lk(mtx_);
-                if (auto* slot = [this, id]() -> Task* {
-                    for (auto& x : all_) if (x.id == id) return &x;
-                    return nullptr;
-                }()) {
-                    if (percent > slot->progress) {
-                        slot->progress = percent;
-                        emit(*slot);
+                for (auto& x : all_) {
+                    if (x.id == id) {
+                        x.state   = ok ? InstallState::Installed : InstallState::Failed;
+                        x.message = std::move(msg);
+                        if (ok) x.progress = 100;
+                        emitLocked(x);
+                        break;
                     }
                 }
-            },
-            [this, id = t.id, doneFlag](bool ok, std::string msg) {
-                {
-                    std::lock_guard<std::mutex> lk(mtx_);
-                    for (auto& x : all_) {
-                        if (x.id == id) {
-                            x.state   = ok ? InstallState::Installed : InstallState::Failed;
-                            x.message = std::move(msg);
-                            if (ok) x.progress = 100;
-                            emit(x);
-                            break;
-                        }
-                    }
-                }
-                doneFlag->set_value(ok);
-            });
+            }
+            doneFlag->set_value(ok);
+        });
 
-        fut.wait();
+    fut.wait();
 
         {
             std::lock_guard<std::mutex> lk(mtx_);
@@ -170,6 +170,18 @@ void TaskQueue::emit(const Task& t) {
     }
     if (cb) {
         try { cb(t); } catch (const std::exception& e) {
+            Logger::instance().error("TaskQueue state callback threw: ", e.what());
+        }
+    }
+}
+
+// Must be called with mtx_ already held. Used by the progress and done
+// callbacks inside workerLoop, which already lock mtx_ to mutate task
+// state. Calling emit() from those would re-enter std::mutex which is
+// undefined behavior (MSVC's std::mutex is an SRWLOCK, not recursive).
+void TaskQueue::emitLocked(const Task& t) {
+    if (stateCb_) {
+        try { stateCb_(t); } catch (const std::exception& e) {
             Logger::instance().error("TaskQueue state callback threw: ", e.what());
         }
     }

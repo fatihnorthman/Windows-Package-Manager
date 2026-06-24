@@ -247,10 +247,29 @@ void WingetAdapter::performAction(const PackageInfo& pkg,
                                   std::function<void(int percent)> progressCb,
                                   ActionCallback done) {
     std::vector<std::string> args;
+    // --silent asks winget to suppress the package's own installer UI
+    // wherever the underlying installer honours the flag. Combined with
+    // --accept-package-agreements and a hidden console, this keeps the
+    // whole flow in-app: the user sees a progress bar instead of a
+    // "Next > Next > Finish" wizard.
     switch (action) {
-        case TaskAction::Install:   args = {"install",   pkg.id, "--accept-source-agreements", "--accept-package-agreements"}; break;
-        case TaskAction::Upgrade:   args = {"upgrade",   "--id", pkg.id, "--accept-source-agreements", "--accept-package-agreements"}; break;
-        case TaskAction::Uninstall: args = {"uninstall", "--id", pkg.id, "--accept-source-agreements"}; break;
+        case TaskAction::Install:
+            args = { "install", "--id", pkg.id,
+                     "--accept-source-agreements",
+                     "--accept-package-agreements",
+                     "--silent" };
+            break;
+        case TaskAction::Upgrade:
+            args = { "upgrade", "--id", pkg.id,
+                     "--accept-source-agreements",
+                     "--accept-package-agreements",
+                     "--silent" };
+            break;
+        case TaskAction::Uninstall:
+            args = { "uninstall", "--id", pkg.id,
+                     "--accept-source-agreements",
+                     "--silent" };
+            break;
     }
     ProcessOptions opt;
     opt.executable = "winget";
