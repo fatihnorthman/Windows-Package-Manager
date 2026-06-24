@@ -61,10 +61,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
 
         case WM_NCHITTEST: {
-            // Force the top bar (y < 64) to behave like a caption, so the
-            // window can be dragged by the user. DWM sometimes returns
-            // HTCLIENT for the entire window which makes the title bar
-            // un-draggable.
+            // Make the top strip draggable, but don't shadow the system's
+            // own non-client hit-test codes (HTCLOSE, HTMINBUTTON, HTMAXBUTTON,
+            // HTSYSMENU, HTHELP, HTNOWHERE, etc.). Otherwise the X button
+            // gets reported as HTCAPTION and the window becomes un-closable
+            // via the title bar.
+            LRESULT def = ::DefWindowProc(hwnd, msg, wParam, lParam);
+            if (def != HTCLIENT) return def;
             POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             ScreenToClient(hwnd, &pt);
             if (pt.y >= 0 && pt.y < 64) return HTCAPTION;
@@ -95,6 +98,7 @@ bool Application::init(HINSTANCE hInstance, int w, int h) {
         return false;
     }
     bridge_.init();
+    bridge_.refreshInstalled();
     bridge_.refreshUpgradable();
     return true;
 }
