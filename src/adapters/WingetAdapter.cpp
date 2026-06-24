@@ -160,7 +160,7 @@ std::string runAndReadFile(const std::vector<std::string>& args, const std::file
     opt.arguments  = args;
 
     auto runner = std::make_shared<ProcessRunner>();
-    runner->onComplete([runner, &captured, promise](const ProcessResult& res) {
+    runner->onComplete([&captured, promise](const ProcessResult& res) {
         captured = res.stdoutText + res.stderrText;
         promise->set_value(res.exitCode == 0 && !res.cancelled);
     });
@@ -279,7 +279,12 @@ void WingetAdapter::performAction(const PackageInfo& pkg,
     runner->onProgress([progressCb](int p) {
         if (progressCb) progressCb(p);
     });
-    runner->onComplete([runner, done](const ProcessResult& res) {
+    // Capture only `done` (not `runner`) so the lambda doesn't keep
+    // the ProcessRunner alive past the function's stack frame. The
+    // worker thread is joined in the ProcessRunner destructor, so
+    // by the time the destructor runs the lambda has already fired
+    // and the `runner` shared_ptr here is the only outstanding ref.
+    runner->onComplete([done](const ProcessResult& res) {
         bool ok = (res.exitCode == 0) && !res.cancelled;
         std::string msg = ok ? "OK (" + std::to_string(res.exitCode) + ")"
                              : "FAILED (" + std::to_string(res.exitCode) + "): " + res.stderrText;

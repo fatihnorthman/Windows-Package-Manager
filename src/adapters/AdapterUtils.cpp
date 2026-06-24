@@ -19,7 +19,7 @@ void runAndParseAsync(
     auto promise = std::make_shared<std::promise<void>>();
     auto fut     = promise->get_future();
     auto runner  = std::make_shared<ProcessRunner>();
-    runner->onComplete([runner, cb, parseFn = std::move(parseFn), promise](const ProcessResult& res) mutable {
+    runner->onComplete([cb, parseFn = std::move(parseFn), promise](const ProcessResult& res) mutable {
         std::vector<PackageInfo> pkgs;
         std::string err;
         if (res.cancelled) {

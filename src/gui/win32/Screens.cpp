@@ -322,17 +322,24 @@ void renderDiscover(Renderer& r, AppState& state, BackendBridge& bridge,
                 || liveState == InstallState::Installing
                 || liveState == InstallState::Updating) {
                 r.fillRoundedRect(ibtn, theme::COL_SURFACE_CONTAINER_HIGHEST, 4.0f);
-                float frac = std::clamp(liveProgress, 0, 100) / 100.0f;
-                if (frac > 0.0f) {
+                if (liveProgress > 0) {
+                    float frac = std::clamp(liveProgress, 0, 100) / 100.0f;
                     r.fillRoundedRect({ ibtn.x, ibtn.y, ibtn.w * frac, ibtn.h },
                                       theme::COL_PRIMARY_CONTAINER, 4.0f);
+                    char pct[16];
+                    std::snprintf(pct, sizeof(pct), "%s %d%%",
+                                  t(keys::discover_btn_installing).c_str(),
+                                  liveProgress);
+                    r.drawText(pct, ibtn, theme::COL_ON_SURFACE,
+                               10.0f, Renderer::Bold, true, true);
+                } else {
+                    // Indeterminate: half-width fill, "Installing..." label
+                    r.fillRoundedRect({ ibtn.x, ibtn.y, ibtn.w * 0.5f, ibtn.h },
+                                      theme::COL_PRIMARY_CONTAINER, 4.0f);
+                    r.drawText(t(keys::discover_btn_installing), ibtn,
+                               theme::COL_ON_PRIMARY_CONTAINER,
+                               10.0f, Renderer::Bold, true, true);
                 }
-                char pct[16];
-                std::snprintf(pct, sizeof(pct), "%s %d%%",
-                              t(keys::discover_btn_installing).c_str(),
-                              liveProgress);
-                r.drawText(pct, ibtn, theme::COL_ON_SURFACE,
-                           10.0f, Renderer::Bold, true, true);
             } else if (liveState == InstallState::Installed) {
                 r.drawText(std::wstring(mdl2::CheckMark) + L"  " +
                            std::wstring(t(keys::updates_btn_done).begin(),
@@ -570,13 +577,23 @@ void renderUpdates(Renderer& r, AppState& state, BackendBridge& bridge,
 
         if (inflight || liveState == InstallState::Installing || liveState == InstallState::Updating) {
             r.fillRoundedRect(actRect, theme::COL_SURFACE_CONTAINER_HIGHEST, 4.0f);
-            float frac = liveProgress / 100.0f;
-            if (frac > 0.0f) {
+            // If we don't have a real percentage yet (e.g. winget --silent
+            // suppressed its own progress output, or the install just
+            // started), render a thin indeterminate stripe rather than
+            // a static "0%" so the user sees that something is happening.
+            if (liveProgress > 0) {
+                float frac = std::clamp(liveProgress, 0, 100) / 100.0f;
                 r.fillRoundedRect({ actRect.x, actRect.y, actRect.w * frac, actRect.h },
                                   theme::COL_PRIMARY_CONTAINER, 4.0f);
+                char pct[8]; std::snprintf(pct, sizeof(pct), "%d%%", liveProgress);
+                r.drawText(pct, actRect, theme::COL_ON_SURFACE, 11.0f, Renderer::Bold, true, true);
+            } else {
+                r.fillRoundedRect({ actRect.x, actRect.y, actRect.w * 0.5f, actRect.h },
+                                  theme::COL_PRIMARY_CONTAINER, 4.0f);
+                r.drawText(t(keys::discover_btn_installing), actRect,
+                           theme::COL_ON_PRIMARY_CONTAINER,
+                           10.0f, Renderer::Bold, true, true);
             }
-            char pct[8]; std::snprintf(pct, sizeof(pct), "%d%%", liveProgress);
-            r.drawText(pct, actRect, theme::COL_ON_SURFACE, 11.0f, Renderer::Bold, true, true);
         } else if (liveState == InstallState::Installed) {
             r.drawText(std::wstring(mdl2::CheckMark) + L"  " +
                        std::wstring(t(keys::updates_btn_done).begin(),
