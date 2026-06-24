@@ -190,6 +190,7 @@ void drawLogoPlaceholder(Renderer& r, const RectF& rect, const std::string& id, 
 
 void drawButton(Renderer& r, const RectF& rect, const std::string& label,
                 bool primary, const InputState& input, bool hover) {
+    (void)input;
     uint32_t bg = primary ? theme::COL_PRIMARY_CONTAINER : 0;
     uint32_t bd = primary ? 0 : theme::COL_PRIMARY;
     uint32_t tx = primary ? theme::COL_ON_PRIMARY_CONTAINER : theme::COL_PRIMARY;
@@ -685,6 +686,7 @@ void renderUpdates(Renderer& r, AppState& state, BackendBridge& bridge,
 // ---- Tasks ----
 void renderTasks(Renderer& r, AppState& state, BackendBridge& bridge,
                  const InputState& input, float x, float y, float w, float h) {
+    (void)input;
     drawHeroHeader(r, x, y, w, t(keys::tasks_title), t(keys::tasks_subtitle));
     float sy = y + 90;
 
@@ -722,12 +724,17 @@ void renderTasks(Renderer& r, AppState& state, BackendBridge& bridge,
             r.drawText(std::string(toString(task.state).data()),
                        { row.x + 370, row.y + 9, 100, 18 },
                        theme::COL_PRIMARY, 13.0f, Renderer::Regular);
-            // Progress bar
-            RectF pb{ row.x + 480, row.y + 13, 200, 10 };
-            r.fillRoundedRect(pb, theme::COL_SURFACE_CONTAINER_HIGHEST, 5.0f);
-            float frac = task.progress / 100.0f;
-            if (frac > 0.0f) r.fillRoundedRect({ pb.x, pb.y, pb.w * frac, pb.h },
-                                                theme::COL_PRIMARY_CONTAINER, 5.0f);
+            // Progress bar or Error message
+            if (task.state == InstallState::Failed) {
+                r.drawText(task.message, { row.x + 480, row.y + 9, w - 12 - 480 - 10, 18 },
+                           theme::COL_ERROR, 11.0f, Renderer::Regular);
+            } else {
+                RectF pb{ row.x + 480, row.y + 13, 200, 10 };
+                r.fillRoundedRect(pb, theme::COL_SURFACE_CONTAINER_HIGHEST, 5.0f);
+                float frac = task.progress / 100.0f;
+                if (frac > 0.0f) r.fillRoundedRect({ pb.x, pb.y, pb.w * frac, pb.h },
+                                                    theme::COL_PRIMARY_CONTAINER, 5.0f);
+            }
         }
         drawScrollbar(r, x + w - 4.0f, listY, listH, offset, total, visible);
     }
@@ -736,6 +743,9 @@ void renderTasks(Renderer& r, AppState& state, BackendBridge& bridge,
 // ---- Settings ----
 void renderSettings(Renderer& r, AppState& state, BackendBridge& bridge,
                     const InputState& input, float x, float y, float w, float h) {
+    (void)state;
+    (void)bridge;
+    (void)h;
     drawHeroHeader(r, x, y, w, t(keys::settings_title), t(keys::settings_subtitle));
     float sy = y + 90;
 
@@ -761,8 +771,7 @@ void renderSettings(Renderer& r, AppState& state, BackendBridge& bridge,
                isTr ? theme::COL_ON_PRIMARY_CONTAINER : theme::COL_ON_SURFACE_VARIANT,
                12.0f, Renderer::Bold, true, true);
 
-    bool hovEn = input.mouseInside && RectContains(enBtn, input.mouse.x, input.mouse.y);
-    bool hovTr = input.mouseInside && RectContains(trBtn, input.mouse.x, input.mouse.y);
+    (void)input;
     pushRect(enBtn, 300, "lang_en");
     pushRect(trBtn, 300, "lang_tr");
 }

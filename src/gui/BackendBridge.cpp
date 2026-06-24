@@ -90,30 +90,46 @@ void BackendBridge::refreshInstalled() {
     auto ctx      = std::make_shared<MergeCtx>();
     ctx->remaining = static_cast<int>(adapters.size());
     std::thread([adapters, st, ctx]() {
-        for (const auto& a : adapters) {
-            a->listInstalled([st, ctx](
-                std::vector<PackageInfo> pkgs, std::string err) {
-                {
-                    std::lock_guard<std::mutex> lk(ctx->mergeMtx);
-                    if (err.empty()) {
-                        ctx->merged.insert(ctx->merged.end(),
-                                           std::make_move_iterator(pkgs.begin()),
-                                           std::make_move_iterator(pkgs.end()));
-                    } else if (ctx->firstError.empty()) {
-                        ctx->firstError = err;
+        try {
+            for (const auto& a : adapters) {
+                a->listInstalled([st, ctx](
+                    std::vector<PackageInfo> pkgs, std::string err) {
+                    try {
+                        {
+                            std::lock_guard<std::mutex> lk(ctx->mergeMtx);
+                            if (err.empty()) {
+                                ctx->merged.insert(ctx->merged.end(),
+                                                   std::make_move_iterator(pkgs.begin()),
+                                                   std::make_move_iterator(pkgs.end()));
+                            } else if (ctx->firstError.empty()) {
+                                ctx->firstError = err;
+                            }
+                        }
+                        if (--ctx->remaining == 0) {
+                            std::lock_guard<std::mutex> lk(st->mtx);
+                            if (!ctx->merged.empty()) {
+                                st->installed = std::move(ctx->merged);
+                                st->lastError.clear();
+                            } else {
+                                st->lastError = ctx->firstError.empty() ? "no installed packages found" : ctx->firstError;
+                            }
+                            st->loadingInstalled = false;
+                        }
+                    } catch (const std::exception& e) {
+                        Logger::instance().error("Exception inside refreshInstalled list callback: ", e.what());
+                        st->loadingInstalled = false;
+                    } catch (...) {
+                        Logger::instance().error("Unknown exception inside refreshInstalled list callback");
+                        st->loadingInstalled = false;
                     }
-                }
-                if (--ctx->remaining == 0) {
-                    std::lock_guard<std::mutex> lk(st->mtx);
-                    if (!ctx->merged.empty()) {
-                        st->installed = std::move(ctx->merged);
-                        st->lastError.clear();
-                    } else {
-                        st->lastError = ctx->firstError.empty() ? "no installed packages found" : ctx->firstError;
-                    }
-                    st->loadingInstalled = false;
-                }
-            });
+                });
+            }
+        } catch (const std::exception& e) {
+            Logger::instance().error("Exception inside refreshInstalled thread: ", e.what());
+            st->loadingInstalled = false;
+        } catch (...) {
+            Logger::instance().error("Unknown exception inside refreshInstalled thread");
+            st->loadingInstalled = false;
         }
     }).detach();
 }
@@ -126,33 +142,49 @@ void BackendBridge::refreshUpgradable() {
     auto ctx      = std::make_shared<MergeCtx>();
     ctx->remaining = static_cast<int>(adapters.size());
     std::thread([adapters, st, ctx]() {
-        for (const auto& a : adapters) {
-            a->listUpgradable([st, ctx](
-                std::vector<PackageInfo> pkgs, std::string err) {
-                {
-                    std::lock_guard<std::mutex> lk(ctx->mergeMtx);
-                    if (err.empty()) {
-                        ctx->merged.insert(ctx->merged.end(),
-                                           std::make_move_iterator(pkgs.begin()),
-                                           std::make_move_iterator(pkgs.end()));
-                    } else if (ctx->firstError.empty()) {
-                        ctx->firstError = err;
+        try {
+            for (const auto& a : adapters) {
+                a->listUpgradable([st, ctx](
+                    std::vector<PackageInfo> pkgs, std::string err) {
+                    try {
+                        {
+                            std::lock_guard<std::mutex> lk(ctx->mergeMtx);
+                            if (err.empty()) {
+                                ctx->merged.insert(ctx->merged.end(),
+                                                   std::make_move_iterator(pkgs.begin()),
+                                                   std::make_move_iterator(pkgs.end()));
+                            } else if (ctx->firstError.empty()) {
+                                ctx->firstError = err;
+                            }
+                        }
+                        if (--ctx->remaining == 0) {
+                            std::lock_guard<std::mutex> lk(st->mtx);
+                            if (!ctx->merged.empty()) {
+                                st->upgradable = std::move(ctx->merged);
+                                st->lastError.clear();
+                            } else {
+                                if (ctx->merged.empty() && ctx->firstError.empty())
+                                    st->lastError.clear();
+                                else
+                                    st->lastError = ctx->firstError;
+                            }
+                            st->loadingUpgradable = false;
+                        }
+                    } catch (const std::exception& e) {
+                        Logger::instance().error("Exception inside refreshUpgradable list callback: ", e.what());
+                        st->loadingUpgradable = false;
+                    } catch (...) {
+                        Logger::instance().error("Unknown exception inside refreshUpgradable list callback");
+                        st->loadingUpgradable = false;
                     }
-                }
-                if (--ctx->remaining == 0) {
-                    std::lock_guard<std::mutex> lk(st->mtx);
-                    if (!ctx->merged.empty()) {
-                        st->upgradable = std::move(ctx->merged);
-                        st->lastError.clear();
-                    } else {
-                        if (ctx->merged.empty() && ctx->firstError.empty())
-                            st->lastError.clear();
-                        else
-                            st->lastError = ctx->firstError;
-                    }
-                    st->loadingUpgradable = false;
-                }
-            });
+                });
+            }
+        } catch (const std::exception& e) {
+            Logger::instance().error("Exception inside refreshUpgradable thread: ", e.what());
+            st->loadingUpgradable = false;
+        } catch (...) {
+            Logger::instance().error("Unknown exception inside refreshUpgradable thread");
+            st->loadingUpgradable = false;
         }
     }).detach();
 }
@@ -169,30 +201,46 @@ void BackendBridge::runSearch(const std::string& query) {
     auto ctx      = std::make_shared<MergeCtx>();
     ctx->remaining = static_cast<int>(adapters.size());
     std::thread([adapters, st, ctx, query]() {
-        for (const auto& a : adapters) {
-            a->search(query, [st, ctx](
-                std::vector<PackageInfo> pkgs, std::string err) {
-                {
-                    std::lock_guard<std::mutex> lk(ctx->mergeMtx);
-                    if (err.empty()) {
-                        ctx->merged.insert(ctx->merged.end(),
-                                           std::make_move_iterator(pkgs.begin()),
-                                           std::make_move_iterator(pkgs.end()));
-                    } else if (ctx->firstError.empty()) {
-                        ctx->firstError = err;
+        try {
+            for (const auto& a : adapters) {
+                a->search(query, [st, ctx](
+                    std::vector<PackageInfo> pkgs, std::string err) {
+                    try {
+                        {
+                            std::lock_guard<std::mutex> lk(ctx->mergeMtx);
+                            if (err.empty()) {
+                                ctx->merged.insert(ctx->merged.end(),
+                                                   std::make_move_iterator(pkgs.begin()),
+                                                   std::make_move_iterator(pkgs.end()));
+                            } else if (ctx->firstError.empty()) {
+                                ctx->firstError = err;
+                            }
+                        }
+                        if (--ctx->remaining == 0) {
+                            std::lock_guard<std::mutex> lk(st->mtx);
+                            if (!ctx->merged.empty()) {
+                                st->searchResults = std::move(ctx->merged);
+                            } else {
+                                st->searchResults.clear();
+                                st->lastError = ctx->firstError;
+                            }
+                            st->loadingSearch = false;
+                        }
+                    } catch (const std::exception& e) {
+                        Logger::instance().error("Exception inside runSearch list callback: ", e.what());
+                        st->loadingSearch = false;
+                    } catch (...) {
+                        Logger::instance().error("Unknown exception inside runSearch list callback");
+                        st->loadingSearch = false;
                     }
-                }
-                if (--ctx->remaining == 0) {
-                    std::lock_guard<std::mutex> lk(st->mtx);
-                    if (!ctx->merged.empty()) {
-                        st->searchResults = std::move(ctx->merged);
-                    } else {
-                        st->searchResults.clear();
-                        st->lastError = ctx->firstError;
-                    }
-                    st->loadingSearch = false;
-                }
-            });
+                });
+            }
+        } catch (const std::exception& e) {
+            Logger::instance().error("Exception inside runSearch thread: ", e.what());
+            st->loadingSearch = false;
+        } catch (...) {
+            Logger::instance().error("Unknown exception inside runSearch thread");
+            st->loadingSearch = false;
         }
     }).detach();
 }

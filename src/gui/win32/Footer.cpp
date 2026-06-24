@@ -26,6 +26,7 @@ static std::string buildToolStrip(const AppState& state) {
 }
 
 void Footer::draw(Renderer& r, AppState& state, BackendBridge& bridge, float W, float H) {
+    (void)bridge;
     float y = H - theme::FOOTER_H;
 
     // Background

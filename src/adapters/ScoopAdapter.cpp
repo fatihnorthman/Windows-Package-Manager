@@ -108,7 +108,15 @@ void ScoopAdapter::listInstalled(PackageListCallback cb) {
     opt.executable = kScoopExe;
     opt.arguments  = { "list" };
     std::thread([cb = std::move(cb), opt]() mutable {
-        adapters::runAndParseAsync(opt, parseScoopList, std::move(cb));
+        try {
+            adapters::runAndParseAsync(opt, parseScoopList, std::move(cb));
+        } catch (const std::exception& e) {
+            Logger::instance().error("Exception inside ScoopAdapter listInstalled thread: ", e.what());
+            if (cb) cb({}, std::string("Internal exception: ") + e.what());
+        } catch (...) {
+            Logger::instance().error("Unknown exception inside ScoopAdapter listInstalled thread");
+            if (cb) cb({}, "Unknown internal exception");
+        }
     }).detach();
 }
 
@@ -117,7 +125,15 @@ void ScoopAdapter::listUpgradable(PackageListCallback cb) {
     opt.executable = kScoopExe;
     opt.arguments  = { "status" };
     std::thread([cb = std::move(cb), opt]() mutable {
-        adapters::runAndParseAsync(opt, parseScoopStatus, std::move(cb));
+        try {
+            adapters::runAndParseAsync(opt, parseScoopStatus, std::move(cb));
+        } catch (const std::exception& e) {
+            Logger::instance().error("Exception inside ScoopAdapter listUpgradable thread: ", e.what());
+            if (cb) cb({}, std::string("Internal exception: ") + e.what());
+        } catch (...) {
+            Logger::instance().error("Unknown exception inside ScoopAdapter listUpgradable thread");
+            if (cb) cb({}, "Unknown internal exception");
+        }
     }).detach();
 }
 
@@ -126,7 +142,15 @@ void ScoopAdapter::search(const std::string& query, PackageListCallback cb) {
     opt.executable = kScoopExe;
     opt.arguments  = { "search", query };
     std::thread([cb = std::move(cb), opt]() mutable {
-        adapters::runAndParseAsync(opt, parseScoopSearch, std::move(cb));
+        try {
+            adapters::runAndParseAsync(opt, parseScoopSearch, std::move(cb));
+        } catch (const std::exception& e) {
+            Logger::instance().error("Exception inside ScoopAdapter search thread: ", e.what());
+            if (cb) cb({}, std::string("Internal exception: ") + e.what());
+        } catch (...) {
+            Logger::instance().error("Unknown exception inside ScoopAdapter search thread");
+            if (cb) cb({}, "Unknown internal exception");
+        }
     }).detach();
 }
 
@@ -157,7 +181,7 @@ void ScoopAdapter::performAction(const PackageInfo& pkg,
     runner->onComplete([done, runner](const ProcessResult& res) {
         bool ok = (res.exitCode == 0) && !res.cancelled;
         std::string msg = ok ? "OK (" + std::to_string(res.exitCode) + ")"
-                             : "FAILED (" + std::to_string(res.exitCode) + "): " + res.stderrText;
+                             : "FAILED (" + std::to_string(res.exitCode) + "): " + adapters::extractError(res);
         if (done) done(ok, std::move(msg));
     });
     runner->start(opt);

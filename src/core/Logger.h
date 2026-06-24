@@ -4,6 +4,7 @@
 #include <sstream>
 #include <mutex>
 #include <iostream>
+#include <fstream>
 #include <chrono>
 #include <iomanip>
 #include <utility>
@@ -30,8 +31,15 @@ public:
         auto t   = std::chrono::system_clock::to_time_t(now);
         std::tm tm{};
         localtime_s(&tm, &t);
+        
         std::cerr << "[" << std::put_time(&tm, "%H:%M:%S") << "] ["
                   << names[static_cast<int>(l)] << "] " << msg << std::endl;
+                  
+        std::ofstream logFile("PackageManager.log", std::ios::app);
+        if (logFile) {
+            logFile << "[" << std::put_time(&tm, "%H:%M:%S") << "] ["
+                    << names[static_cast<int>(l)] << "] " << msg << "\n";
+        }
     }
 
     template <typename... Args>

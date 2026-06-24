@@ -86,81 +86,145 @@ void TaskQueue::workerLoop() {
     };
 
     while (true) {
-        Task t;
-        {
-            std::unique_lock<std::mutex> lk(mtx_);
-            cv_.wait(lk, [this] { return stop_.load() || !queue_.empty(); });
-            if (stop_.load() && queue_.empty()) return;
-            t = queue_.front();
-            queue_.pop();
-            ++active_;
+        try {
+            Task t;
+            {
+                std::unique_lock<std::mutex> lk(mtx_);
+                cv_.wait(lk, [this] { return stop_.load() || !queue_.empty(); });
+                if (stop_.load() && queue_.empty()) return;
+                t = queue_.front();
+                queue_.pop();
+                ++active_;
 
-            if (auto* slot = findSlot(t.id)) {
-                slot->state    = (t.action == TaskAction::Upgrade   ? InstallState::Updating
-                               : t.action == TaskAction::Uninstall ? InstallState::Installing
-                               :                                     InstallState::Installing);
-                slot->progress = 0;
-                t = *slot;
-            }
-        }
-        Logger::instance().info("Task started id=", t.id, " pkg=", t.package.id);
-        emit(t);
-
-        auto adapter = resolveAdapter(t);
-        if (!adapter) {
-            std::lock_guard<std::mutex> lk(mtx_);
-            if (auto* slot = findSlot(t.id)) {
-                slot->state   = InstallState::Failed;
-                slot->message = std::string("no adapter bound for manager=") + std::string(toString(t.package.manager));
-                t = *slot;
-            }
-            --active_;
-            Logger::instance().error("Task id=", t.id, " failed: no adapter for manager=", toString(t.package.manager));
-            emit(t);
-            continue;
-        }
-
-    auto doneFlag = std::make_shared<std::promise<bool>>();
-    auto fut      = doneFlag->get_future();
-
-    adapter->performAction(
-        t.package,
-        t.action,
-        [this, id = t.id](int percent) {
-            std::lock_guard<std::mutex> lk(mtx_);
-            if (auto* slot = [this, id]() -> Task* {
-                for (auto& x : all_) if (x.id == id) return &x;
-                return nullptr;
-            }()) {
-                if (percent > slot->progress) {
-                    slot->progress = percent;
-                    emitLocked(*slot);   // mtx_ is held, use the unlocked variant
+                if (auto* slot = findSlot(t.id)) {
+                    slot->state    = (t.action == TaskAction::Upgrade   ? InstallState::Updating
+                                   : t.action == TaskAction::Uninstall ? InstallState::Installing
+                                   :                                     InstallState::Installing);
+                    slot->progress = 0;
+                    t = *slot;
                 }
             }
-        },
-        [this, id = t.id, doneFlag](bool ok, std::string msg) {
-            {
+            Logger::instance().info("Task started id=", t.id, " pkg=", t.package.id);
+            emit(t);
+
+            auto adapter = resolveAdapter(t);
+            if (!adapter) {
                 std::lock_guard<std::mutex> lk(mtx_);
-                for (auto& x : all_) {
-                    if (x.id == id) {
-                        x.state   = ok ? InstallState::Installed : InstallState::Failed;
-                        x.message = std::move(msg);
-                        if (ok) x.progress = 100;
-                        emitLocked(x);
-                        break;
+                if (auto* slot = findSlot(t.id)) {
+                    slot->state   = InstallState::Failed;
+                    slot->message = std::string("no adapter bound for manager=") + std::string(toString(t.package.manager));
+                    t = *slot;
+                }
+                --active_;
+                Logger::instance().error("Task id=", t.id, " failed: no adapter for manager=", toString(t.package.manager));
+                emit(t);
+                cv_.notify_one();
+                continue;
+            }
+
+            try {
+                auto doneFlag = std::make_shared<std::promise<bool>>();
+                auto fut      = doneFlag->get_future();
+
+                adapter->performAction(
+                    t.package,
+                    t.action,
+                    [this, id = t.id](int percent) {
+                        try {
+                            Task updatedTask;
+                            bool shouldEmit = false;
+                            {
+                                std::lock_guard<std::mutex> lk(mtx_);
+                                if (auto* slot = [this, id]() -> Task* {
+                                    for (auto& x : all_) if (x.id == id) return &x;
+                                    return nullptr;
+                                }()) {
+                                    if (percent > slot->progress) {
+                                        slot->progress = percent;
+                                        updatedTask = *slot;
+                                        shouldEmit = true;
+                                    }
+                                }
+                            }
+                            if (shouldEmit) {
+                                emit(updatedTask);
+                            }
+                        } catch (const std::exception& e) {
+                            Logger::instance().error("Exception inside TaskQueue progress callback: ", e.what());
+                        } catch (...) {
+                            Logger::instance().error("Unknown exception inside TaskQueue progress callback");
+                        }
+                    },
+                    [this, id = t.id, doneFlag](bool ok, std::string msg) {
+                        try {
+                            Task updatedTask;
+                            bool shouldEmit = false;
+                            {
+                                std::lock_guard<std::mutex> lk(mtx_);
+                                for (auto& x : all_) {
+                                    if (x.id == id) {
+                                        x.state   = ok ? InstallState::Installed : InstallState::Failed;
+                                        x.message = std::move(msg);
+                                        if (ok) x.progress = 100;
+                                        if (!ok) {
+                                            Logger::instance().error("Task id=", x.id, " pkg=", x.package.id, " action=", toString(x.action), " FAILED: ", x.message);
+                                        } else {
+                                            Logger::instance().info("Task id=", x.id, " pkg=", x.package.id, " action=", toString(x.action), " completed successfully");
+                                        }
+                                        updatedTask = x;
+                                        shouldEmit = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (shouldEmit) {
+                                emit(updatedTask);
+                            }
+                            doneFlag->set_value(ok);
+                        } catch (const std::exception& e) {
+                            Logger::instance().error("Exception inside TaskQueue done callback: ", e.what());
+                            try { doneFlag->set_value(false); } catch (...) {}
+                        } catch (...) {
+                            Logger::instance().error("Unknown exception inside TaskQueue done callback");
+                            try { doneFlag->set_value(false); } catch (...) {}
+                        }
+                    });
+
+                fut.wait();
+            } catch (const std::exception& e) {
+                Logger::instance().error("Exception executing task id=", t.id, ": ", e.what());
+                {
+                    std::lock_guard<std::mutex> lk(mtx_);
+                    if (auto* slot = findSlot(t.id)) {
+                        slot->state   = InstallState::Failed;
+                        slot->message = std::string("Execution exception: ") + e.what();
+                        t = *slot;
                     }
                 }
+                emit(t);
+            } catch (...) {
+                Logger::instance().error("Unknown exception executing task id=", t.id);
+                {
+                    std::lock_guard<std::mutex> lk(mtx_);
+                    if (auto* slot = findSlot(t.id)) {
+                        slot->state   = InstallState::Failed;
+                        slot->message = "Unknown execution exception";
+                        t = *slot;
+                    }
+                }
+                emit(t);
             }
-            doneFlag->set_value(ok);
-        });
 
-    fut.wait();
-
-        {
-            std::lock_guard<std::mutex> lk(mtx_);
-            --active_;
+            {
+                std::lock_guard<std::mutex> lk(mtx_);
+                --active_;
+            }
+            cv_.notify_one();
+        } catch (const std::exception& e) {
+            Logger::instance().error("Exception in TaskQueue workerLoop: ", e.what());
+        } catch (...) {
+            Logger::instance().error("Unknown exception in TaskQueue workerLoop");
         }
-        cv_.notify_one();
     }
 }
 
@@ -177,17 +241,6 @@ void TaskQueue::emit(const Task& t) {
     }
 }
 
-// Must be called with mtx_ already held. Used by the progress and done
-// callbacks inside workerLoop, which already lock mtx_ to mutate task
-// state. Calling emit() from those would re-enter std::mutex which is
-// undefined behavior (MSVC's std::mutex is an SRWLOCK, not recursive).
-void TaskQueue::emitLocked(const Task& t) {
-    if (stateCb_) {
-        try { stateCb_(t); } catch (const std::exception& e) {
-            Logger::instance().error("TaskQueue state callback threw: ", e.what());
-        }
-    }
-}
 
 void TaskQueue::shutdown() {
     {

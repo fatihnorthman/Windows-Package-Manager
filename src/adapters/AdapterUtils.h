@@ -47,4 +47,8 @@ void runAndParseAsync(
 // for at most ~1s.
 bool probeVersion(const std::string& executable);
 
+// Extract a clean error string from ProcessResult (checking stderr, and if empty,
+// searching stdout for error keywords or the last non-empty line).
+std::string extractError(const ProcessResult& res);
+
 } // namespace pm::adapters

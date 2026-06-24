@@ -151,25 +151,37 @@ std::vector<PackageInfo> parseSearchTable(const std::string& table, const std::s
 // ---------------- File-based runner for `winget export` --------------------
 
 std::string runAndReadFile(const std::vector<std::string>& args, const std::filesystem::path& file) {
-    auto promise = std::make_shared<std::promise<bool>>();
-    auto fut     = promise->get_future();
-    auto captured = std::make_shared<std::string>();
+    try {
+        auto promise = std::make_shared<std::promise<bool>>();
+        auto fut     = promise->get_future();
+        auto captured = std::make_shared<std::string>();
 
-    ProcessOptions opt;
-    opt.executable = "winget";
-    opt.arguments  = args;
+        ProcessOptions opt;
+        opt.executable = "winget";
+        opt.arguments  = args;
 
-    auto runner = std::make_shared<ProcessRunner>();
-    runner->onComplete([captured, promise](const ProcessResult& res) {
-        *captured = res.stdoutText + res.stderrText;
-        promise->set_value(res.exitCode == 0 && !res.cancelled);
-    });
-    if (!runner->start(opt)) return {};
-    fut.wait();
-    if (!std::filesystem::exists(file)) return {};
-    std::ifstream in(file);
-    std::stringstream ss; ss << in.rdbuf();
-    return ss.str();
+        auto runner = std::make_shared<ProcessRunner>();
+        runner->onComplete([captured, promise](const ProcessResult& res) {
+            try {
+                *captured = res.stdoutText + res.stderrText;
+                promise->set_value(res.exitCode == 0 && !res.cancelled);
+            } catch (...) {
+                try { promise->set_value(false); } catch (...) {}
+            }
+        });
+        if (!runner->start(opt)) return {};
+        fut.wait();
+        if (!std::filesystem::exists(file)) return {};
+        std::ifstream in(file);
+        std::stringstream ss; ss << in.rdbuf();
+        return ss.str();
+    } catch (const std::exception& e) {
+        Logger::instance().error("Exception in runAndReadFile: ", e.what());
+        return {};
+    } catch (...) {
+        Logger::instance().error("Unknown exception in runAndReadFile");
+        return {};
+    }
 }
 
 std::filesystem::path makeTempJson() {
@@ -207,18 +219,26 @@ bool WingetAdapter::isAvailable() const {
 void WingetAdapter::listInstalled(PackageListCallback cb) {
     auto tmp = makeTempJson();
     std::thread([cb = std::move(cb), tmp]() mutable {
-        std::vector<std::string> args = {"export", "-o", tmp.string(), "--accept-source-agreements"};
-        std::string json = runAndReadFile(args, tmp);
-        std::error_code ec; std::filesystem::remove(tmp, ec);
-        std::vector<PackageInfo> pkgs;
-        std::string err;
-        if (json.empty()) {
-            err = "winget export produced no JSON file";
-        } else {
-            try { pkgs = parseExportJson(json); }
-            catch (const std::exception& e) { err = std::string("parse: ") + e.what(); }
+        try {
+            std::vector<std::string> args = {"export", "-o", tmp.string(), "--accept-source-agreements"};
+            std::string json = runAndReadFile(args, tmp);
+            std::error_code ec; std::filesystem::remove(tmp, ec);
+            std::vector<PackageInfo> pkgs;
+            std::string err;
+            if (json.empty()) {
+                err = "winget export produced no JSON file";
+            } else {
+                try { pkgs = parseExportJson(json); }
+                catch (const std::exception& e) { err = std::string("parse: ") + e.what(); }
+            }
+            if (cb) cb(std::move(pkgs), std::move(err));
+        } catch (const std::exception& e) {
+            Logger::instance().error("Exception inside WingetAdapter listInstalled thread: ", e.what());
+            if (cb) cb({}, std::string("Internal exception: ") + e.what());
+        } catch (...) {
+            Logger::instance().error("Unknown exception inside WingetAdapter listInstalled thread");
+            if (cb) cb({}, "Unknown internal exception");
         }
-        if (cb) cb(std::move(pkgs), std::move(err));
     }).detach();
 }
 
@@ -227,7 +247,15 @@ void WingetAdapter::listUpgradable(PackageListCallback cb) {
     opt.executable = "winget";
     opt.arguments  = {"upgrade", "--accept-source-agreements"};
     std::thread([cb = std::move(cb), opt]() mutable {
-        adapters::runAndParseAsync(opt, parseUpgradeTable, std::move(cb));
+        try {
+            adapters::runAndParseAsync(opt, parseUpgradeTable, std::move(cb));
+        } catch (const std::exception& e) {
+            Logger::instance().error("Exception inside WingetAdapter listUpgradable thread: ", e.what());
+            if (cb) cb({}, std::string("Internal exception: ") + e.what());
+        } catch (...) {
+            Logger::instance().error("Unknown exception inside WingetAdapter listUpgradable thread");
+            if (cb) cb({}, "Unknown internal exception");
+        }
     }).detach();
 }
 
@@ -236,9 +264,17 @@ void WingetAdapter::search(const std::string& query, PackageListCallback cb) {
     opt.executable = "winget";
     opt.arguments  = {"search", query, "--accept-source-agreements"};
     std::thread([cb = std::move(cb), opt, query]() mutable {
-        adapters::runAndParseAsync(opt,
-            [query](const std::string& s) { return parseSearchTable(s, query); },
-            std::move(cb));
+        try {
+            adapters::runAndParseAsync(opt,
+                [query](const std::string& s) { return parseSearchTable(s, query); },
+                std::move(cb));
+        } catch (const std::exception& e) {
+            Logger::instance().error("Exception inside WingetAdapter search thread: ", e.what());
+            if (cb) cb({}, std::string("Internal exception: ") + e.what());
+        } catch (...) {
+            Logger::instance().error("Unknown exception inside WingetAdapter search thread");
+            if (cb) cb({}, "Unknown internal exception");
+        }
     }).detach();
 }
 
@@ -252,21 +288,25 @@ void WingetAdapter::performAction(const PackageInfo& pkg,
     // --accept-package-agreements and a hidden console, this keeps the
     // whole flow in-app: the user sees a progress bar instead of a
     // "Next > Next > Finish" wizard.
+    // --exact prevents matching multiple packages and prompting or failing.
     switch (action) {
         case TaskAction::Install:
             args = { "install", "--id", pkg.id,
+                     "--exact",
                      "--accept-source-agreements",
                      "--accept-package-agreements",
                      "--silent" };
             break;
         case TaskAction::Upgrade:
             args = { "upgrade", "--id", pkg.id,
+                     "--exact",
                      "--accept-source-agreements",
                      "--accept-package-agreements",
                      "--silent" };
             break;
         case TaskAction::Uninstall:
             args = { "uninstall", "--id", pkg.id,
+                     "--exact",
                      "--accept-source-agreements",
                      "--silent" };
             break;
@@ -279,15 +319,13 @@ void WingetAdapter::performAction(const PackageInfo& pkg,
     runner->onProgress([progressCb](int p) {
         if (progressCb) progressCb(p);
     });
-    // Capture only `done` (not `runner`) so the lambda doesn't keep
-    // the ProcessRunner alive past the function's stack frame. The
-    // worker thread is joined in the ProcessRunner destructor, so
-    // by the time the destructor runs the lambda has already fired
-    // and the `runner` shared_ptr here is the only outstanding ref.
+    // Capture `runner` to keep it alive for the duration of execution.
+    // At the end of execution, we break the circular reference by setting
+    // the callback pointers to nullptr.
     runner->onComplete([done, runner](const ProcessResult& res) {
         bool ok = (res.exitCode == 0) && !res.cancelled;
         std::string msg = ok ? "OK (" + std::to_string(res.exitCode) + ")"
-                             : "FAILED (" + std::to_string(res.exitCode) + "): " + res.stderrText;
+                             : "FAILED (" + std::to_string(res.exitCode) + "): " + adapters::extractError(res);
         if (done) done(ok, std::move(msg));
     });
     runner->start(opt);

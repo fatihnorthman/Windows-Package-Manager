@@ -63,6 +63,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             // focused TextInput. Enter triggers the bound action
             // (currently runSearch on the Discover query).
             auto& s = g_app->bridge().state();
+            std::lock_guard<std::mutex> lk(s.mtx);
             if (!s.searchInput.focused) return 0;
             wchar_t wc = (wchar_t)wParam;
             if (wc == L'\r' || wc == L'\n') {
@@ -104,6 +105,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             int rows   = delta / 60;
             if (rows == 0) rows = (delta > 0) ? 1 : -1;
             auto& s    = g_app->bridge().state();
+            std::lock_guard<std::mutex> lk(s.mtx);
             int  idx   = static_cast<int>(s.currentScreen);
             int  next  = s.scrollOffset[idx] - rows;
             if (next < 0) next = 0;
@@ -222,6 +224,7 @@ bool Application::initWindow(HINSTANCE hInstance, int w, int h) {
 
 void Application::handleMouseUp(int x, int y) {
     AppState& state = bridge_.state();
+    std::lock_guard<std::mutex> lk(state.mtx);
     RECT rc; GetClientRect(hwnd_, &rc);
     const float W = static_cast<float>(rc.right);
     const float H = static_cast<float>(rc.bottom);
@@ -263,6 +266,9 @@ void Application::handleMouseMove(int x, int y) {
 }
 
 void Application::renderFrame() {
+    AppState& state = bridge_.state();
+    std::lock_guard<std::mutex> lk(state.mtx);
+
     renderer_.beginFrame();
     renderer_.clear(theme::COL_BACKGROUND);
 
@@ -282,8 +288,6 @@ void Application::renderFrame() {
     renderer_.fillRectRadial({ 0, 0, W, H * 0.6f },
                              0.15f, 0.25f, 0.85f,
                              theme::COL_HALO_CENTER, theme::COL_HALO_EDGE);
-
-    AppState& state = bridge_.state();
 
     Sidebar::draw(renderer_, state, input_);
     TopBar::draw(renderer_, state, input_, W, maximized_);
