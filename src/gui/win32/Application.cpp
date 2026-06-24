@@ -116,7 +116,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (def != HTCLIENT) return def;
             POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             ScreenToClient(hwnd, &pt);
-            if (pt.y >= 0 && pt.y < 32) return HTCAPTION;
+            // Reserve the rightmost 150px of the title strip for our
+            // custom min/max/close buttons. The rest of the top 32px
+            // is the drag region. Returning HTCAPTION for the button
+            // area would make clicks there start a window drag instead
+            // of reaching WM_LBUTTONUP -> TopBar::hitTest -> Close.
+            RECT rc; GetClientRect(hwnd, &rc);
+            if (pt.y >= 0 && pt.y < 32 && pt.x < rc.right - 150) {
+                return HTCAPTION;
+            }
             return HTCLIENT;
         }
 

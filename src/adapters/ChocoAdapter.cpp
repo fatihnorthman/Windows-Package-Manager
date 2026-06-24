@@ -9,10 +9,26 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <windows.h>
 
 namespace pm {
 
 namespace {
+
+// Choco's official installer drops choco.exe at
+// C:\ProgramData\chocolatey\bin and adds that folder to the SYSTEM
+// PATH. New shells inherit that path, but a session that was already
+// open (or an app launched before the install) won't see it until
+// restart. We probe the default location explicitly so the user
+// doesn't have to relaunch the app after installing choco.
+std::string resolveChocoPath() {
+    static const std::string defaultPath = "C:\\ProgramData\\chocolatey\\bin\\choco.exe";
+    DWORD attr = GetFileAttributesA(defaultPath.c_str());
+    if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
+        return defaultPath;
+    }
+    return "choco";
+}
 
 // ---------------- Choco parsers ----------------
 //
@@ -105,12 +121,12 @@ std::vector<PackageInfo> parseChocoSearch(const std::string& text) {
 } // anonymous
 
 bool ChocoAdapter::isAvailable() const {
-    return adapters::probeVersion("choco");
+    return adapters::probeVersion(resolveChocoPath());
 }
 
 void ChocoAdapter::listInstalled(PackageListCallback cb) {
     ProcessOptions opt;
-    opt.executable = "choco";
+    opt.executable = resolveChocoPath();
     opt.arguments  = { "list", "--limit-output" };
     std::thread([cb = std::move(cb), opt]() mutable {
         adapters::runAndParseAsync(opt, parseChocoList, std::move(cb));
@@ -119,7 +135,7 @@ void ChocoAdapter::listInstalled(PackageListCallback cb) {
 
 void ChocoAdapter::listUpgradable(PackageListCallback cb) {
     ProcessOptions opt;
-    opt.executable = "choco";
+    opt.executable = resolveChocoPath();
     opt.arguments  = { "outdated", "--limit-output" };
     std::thread([cb = std::move(cb), opt]() mutable {
         adapters::runAndParseAsync(opt, parseChocoOutdated, std::move(cb));
@@ -128,7 +144,7 @@ void ChocoAdapter::listUpgradable(PackageListCallback cb) {
 
 void ChocoAdapter::search(const std::string& query, PackageListCallback cb) {
     ProcessOptions opt;
-    opt.executable = "choco";
+    opt.executable = resolveChocoPath();
     opt.arguments  = { "search", query, "--limit-output" };
     std::thread([cb = std::move(cb), opt]() mutable {
         adapters::runAndParseAsync(opt, parseChocoSearch, std::move(cb));
@@ -152,11 +168,8 @@ void ChocoAdapter::performAction(const PackageInfo& pkg,
             break;
     }
     ProcessOptions opt;
-    opt.executable = "choco";
+    opt.executable = resolveChocoPath();
     opt.arguments  = std::move(args);
-    // Chocolatey writes a multi-line ASCII progress bar to stderr that the
-    // generic ProcessRunner would mis-parse. Disable the progress callback by
-    // giving it a no-op; the action still emits a final result via done().
     (void)progressCb;
 
     auto runner = std::make_shared<ProcessRunner>();

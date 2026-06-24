@@ -213,18 +213,48 @@ void renderDiscover(Renderer& r, AppState& state, BackendBridge& bridge,
     drawHeroHeader(r, x, y, w, t(keys::discover_title), t(keys::discover_subtitle));
     float sy = y + 90;
 
-    // Search box + button
-    RectF sBox { x, sy, w - 140, 36 };
-    r.fillRoundedRect(sBox, theme::COL_SURFACE_CONTAINER_HIGH, 6.0f);
-    r.drawText(std::wstring(mdl2::Search), { sBox.x + 12, sBox.y + 9, 18, 18 },
-               theme::COL_ON_SURFACE_VARIANT, 14.0f, Renderer::Icon);
-    r.drawText(t(keys::discover_search_ph), { sBox.x + 36, sBox.y + 9, sBox.w - 50, 18 },
-               theme::COL_ON_SURFACE_VARIANT, 13.0f, Renderer::Regular);
+    // Search box + button. The box geometry is registered with
+    // state.searchInput so the WndProc can route WM_CHAR into it and
+    // handleMouseUp can give it focus on click.
+    RectF sBox{ x, sy, w - 140.0f, 36.0f };
+    state.searchInput.boxX = sBox.x;
+    state.searchInput.boxY = sBox.y;
+    state.searchInput.boxW = sBox.w;
+    state.searchInput.boxH = sBox.h;
+    state.searchInput.boxValid = (state.currentScreen == ScreenId::Discover);
 
-    RectF refreshBtn { x + w - 130, sy, 130, 36 };
-    bool hover = input.mouseInside && RectContains(refreshBtn, input.mouse.x, input.mouse.y);
-    drawButton(r, refreshBtn, t(keys::common_refresh), true, input, hover);
-    pushRect(refreshBtn, 100, "discover_search");
+    if (state.searchInput.focused) {
+        r.fillRectLinearV(sBox, 0xFF353535, theme::COL_SURFACE_CONTAINER_HIGH, 8.0f);
+        r.strokeRect(sBox, theme::COL_PRIMARY, 1.5f, 8.0f);
+    } else {
+        r.fillRectLinearV(sBox, 0xFF2F2F2F, theme::COL_SURFACE_CONTAINER_HIGH, 8.0f);
+        r.strokeRect(sBox, theme::COL_OUTLINE_VARIANT, 1.0f, 8.0f);
+    }
+    r.drawText(std::wstring(mdl2::Search), { sBox.x + 14, sBox.y + 9, 18, 18 },
+               theme::COL_ON_SURFACE_VARIANT, 14.0f, Renderer::Icon);
+    if (state.searchInput.text.empty() && !state.searchInput.focused) {
+        r.drawText(t(keys::discover_search_ph),
+                   { sBox.x + 40, sBox.y + 9, sBox.w - 56, 18 },
+                   theme::COL_ON_SURFACE_VARIANT, 13.0f, Renderer::Regular);
+    } else {
+        r.drawText(state.searchInput.text,
+                   { sBox.x + 40, sBox.y + 9, sBox.w - 56, 18 },
+                   theme::COL_ON_SURFACE, 13.0f, Renderer::Regular);
+        if (state.searchInput.focused) {
+            // Cheap text-width estimate: ~7px per char at 13pt. A real
+            // measurement would call IDWriteTextLayout, but this is
+            // close enough for the cursor to track the caret.
+            float cursorX = sBox.x + 40 + 7.0f * (float)state.searchInput.text.size();
+            r.fillRect({ cursorX, sBox.y + 8, 1.5f, 20 }, theme::COL_PRIMARY);
+        }
+    }
+
+    RectF searchBtn{ x + w - 130, sy, 130, 36 };
+    bool hover = input.mouseInside && RectContains(searchBtn, input.mouse.x, input.mouse.y);
+    drawButton(r, searchBtn,
+               state.loadingSearch.load() ? t(keys::common_loading) : t(keys::common_refresh),
+               true, input, hover);
+    pushRect(searchBtn, 100, "discover_search");
 
     // Results
     if (state.loadingSearch.load()) {
@@ -245,7 +275,10 @@ void renderDiscover(Renderer& r, AppState& state, BackendBridge& bridge,
             const auto& p = state.searchResults[offset + i];
             float ry = listY + i * kRowStride;
             RectF row{ x, ry, w - 12.0f, 36.0f };
-            r.fillRoundedRect(row, theme::COL_SURFACE_CONTAINER, 6.0f);
+            r.fillRectLinearV(row,
+                              theme::COL_CARD_GRAD_TOP, theme::COL_CARD_GRAD_BOT,
+                              6.0f);
+            r.strokeRect(row, theme::COL_OUTLINE_VARIANT, 1.0f, 6.0f);
             r.drawText(p.name, { row.x + 12, row.y + 9, 200, 18 },
                        theme::COL_ON_SURFACE, 13.0f, Renderer::Regular);
             r.drawText(p.id, { row.x + 220, row.y + 9, 200, 18 },
@@ -608,8 +641,8 @@ bool ScreenHitTest(int x, int y, AppState& state, BackendBridge& bridge) {
             y >= r.bounds.y && y <= r.bounds.y + r.bounds.h) {
             switch (r.id) {
                 case 100:  // discover search
-                    // (placeholder; real input isn't wired)
-                    break;
+                    bridge.runSearch(state.searchInput.text);
+                    return true;
                 case 101:  // installed refresh
                     bridge.refreshInstalled();
                     return true;
