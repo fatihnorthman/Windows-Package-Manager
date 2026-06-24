@@ -7,6 +7,7 @@
 #include "../i18n.h"
 #include "../../core/Logger.h"
 #include <dwmapi.h>
+#include <algorithm>
 #include <windowsx.h>
 
 #pragma comment(lib, "dwmapi.lib")
@@ -59,6 +60,22 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (wParam == VK_SHIFT) g_app->input().shift = false;
             if (wParam == VK_CONTROL) g_app->input().ctrl = false;
             return 0;
+
+        case WM_MOUSEWHEEL: {
+            // GET_WHEEL_DELTA_WPARAM returns ±120 per notch. We convert to
+            // "rows" (≈2 per notch at 60 rows/unit) and feed it into the
+            // current screen's scroll slot. Wheel-up → offset decreases
+            // (we reveal content from above); wheel-down → offset increases.
+            int delta  = GET_WHEEL_DELTA_WPARAM(wParam);
+            int rows   = delta / 60;
+            if (rows == 0) rows = (delta > 0) ? 1 : -1;
+            auto& s    = g_app->bridge().state();
+            int  idx   = static_cast<int>(s.currentScreen);
+            int  next  = s.scrollOffset[idx] - rows;
+            if (next < 0) next = 0;
+            s.scrollOffset[idx] = next;
+            return 0;
+        }
 
         case WM_NCHITTEST: {
             // Make the top strip draggable, but don't shadow the system's

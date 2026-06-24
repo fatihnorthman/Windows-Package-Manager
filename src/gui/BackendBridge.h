@@ -3,6 +3,7 @@
 #include "../core/PackageInfo.h"
 #include "../adapters/IPackageAdapter.h"
 #include "../services/TaskQueue.h"
+#include <array>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -57,6 +58,11 @@ struct AppState {
 
     // Bottom task-queue drawer UI state (collapsed vs expanded).
     bool                             tasksDrawerOpen = false;
+
+    // Per-screen scroll offset (rows). One slot per ScreenId; populated by
+    // WM_MOUSEWHEEL, consumed by Screens::draw. We keep one slot per screen
+    // so navigating away and back doesn't lose the user's position.
+    std::array<int, 5>               scrollOffset{0, 0, 0, 0, 0};
 };
 
 // BackendBridge owns the adapters and queue. UI calls into bridge methods;

@@ -33,6 +33,36 @@ constexpr float kRowH         = 64.0f;
 constexpr float kRowGap       = 6.0f;
 constexpr float kLogoSize     = 36.0f;
 
+// Vertical scrollbar on the right edge of the list area. Only drawn when
+// the list actually overflows (total > visible). Thumb height is
+// proportional to the visible/total ratio; its position reflects the
+// current scrollOffset (clamped to valid range by the caller).
+void drawScrollbar(Renderer& r, float trackX, float trackY, float trackH,
+                   int offset, int total, int visible) {
+    if (total <= visible || total <= 0) return;
+    int maxOff = total - visible;
+    if (maxOff <= 0) return;
+    r.fillRoundedRect({ trackX, trackY, 4.0f, trackH },
+                      theme::COL_SURFACE_CONTAINER_HIGHEST, 2.0f);
+    float thumbH = std::max(24.0f, (visible / (float)total) * trackH);
+    float span   = trackH - thumbH;
+    float thumbY = trackY + (offset / (float)maxOff) * span;
+    r.fillRoundedRect({ trackX, thumbY, 4.0f, thumbH },
+                      theme::COL_PRIMARY_CONTAINER, 2.0f);
+}
+
+// Clamp scrollOffset[screen] to a valid range for a list of `total` items
+// showing `visible` at a time. Writes the clamped value back so the UI
+// never sits at an out-of-range offset after a refresh that shrank the
+// list.
+int clampScrollOffset(AppState& state, ScreenId id, int total, int visible) {
+    int idx    = static_cast<int>(id);
+    int maxOff = std::max(0, total - visible);
+    int off    = std::clamp(state.scrollOffset[idx], 0, maxOff);
+    state.scrollOffset[idx] = off;
+    return off;
+}
+
 // Track clickable button regions in the active screen so we can hit-test them.
 struct ClickRect {
     RectF  bounds;
@@ -130,27 +160,33 @@ void renderDiscover(Renderer& r, AppState& state, BackendBridge& bridge,
     if (state.loadingSearch.load()) {
         r.drawText(t(keys::common_loading), { x, sy + 50, w, 20 },
                    theme::COL_ON_SURFACE_VARIANT, 13.0f, Renderer::Regular);
-    } else if (state.searchResults.empty()) {
+    } else     if (state.searchResults.empty()) {
         r.drawText(t(keys::discover_empty), { x, sy + 50, w, 30 },
                    theme::COL_ON_SURFACE_VARIANT, 13.0f, Renderer::Regular);
     } else {
-        float ry = sy + 50;
-        int n = std::min((int)state.searchResults.size(), 25);
-        for (int i = 0; i < n; ++i) {
-            const auto& p = state.searchResults[i];
-            RectF row { x, ry, w, 36 };
+        constexpr float kRowStride = 42.0f;
+        float listY = sy + 50;
+        float listH = std::max(0.0f, h - (listY - y) - 8.0f);
+        int   total   = (int)state.searchResults.size();
+        int   visible = std::max(1, (int)(listH / kRowStride));
+        int   offset  = clampScrollOffset(state, ScreenId::Discover, total, visible);
+
+        for (int i = 0; i < visible && (offset + i) < total; ++i) {
+            const auto& p = state.searchResults[offset + i];
+            float ry = listY + i * kRowStride;
+            RectF row{ x, ry, w - 12.0f, 36.0f };
             r.fillRoundedRect(row, theme::COL_SURFACE_CONTAINER, 6.0f);
             r.drawText(p.name, { row.x + 12, row.y + 9, 200, 18 },
                        theme::COL_ON_SURFACE, 13.0f, Renderer::Regular);
             r.drawText(p.id, { row.x + 220, row.y + 9, 200, 18 },
                        theme::COL_ON_SURFACE_VARIANT, 12.0f, Renderer::Regular);
-            RectF ibtn { row.x + row.w - 100, row.y + 4, 90, 28 };
+            RectF ibtn{ row.x + row.w - 100, row.y + 4, 90, 28 };
             bool hov = input.mouseInside && RectContains(ibtn, input.mouse.x, input.mouse.y);
             drawButton(r, ibtn, t(keys::updates_btn_update), false, input, hov);
             pushRect(ibtn, 200,
                      std::string("install:") + std::string(toString(p.manager)) + ":" + p.id);
-            ry += 42;
         }
+        drawScrollbar(r, x + w - 4.0f, listY, listH, offset, total, visible);
     }
 }
 
@@ -181,11 +217,17 @@ void renderInstalled(Renderer& r, AppState& state, BackendBridge& bridge,
         r.drawText(t(keys::installed_empty), { x, sy + 60, w, 30 },
                    theme::COL_ON_SURFACE_VARIANT, 13.0f, Renderer::Regular);
     } else {
-        float ry = sy + 60;
-        int n = std::min((int)state.installed.size(), 25);
-        for (int i = 0; i < n; ++i) {
-            const auto& p = state.installed[i];
-            RectF row { x, ry, w, 36 };
+        constexpr float kRowStride = 42.0f;   // 36 row + 6 gap
+        float listY = sy + 60;
+        float listH = std::max(0.0f, h - (listY - y) - 8.0f);
+        int   total   = (int)state.installed.size();
+        int   visible = std::max(1, (int)(listH / kRowStride));
+        int   offset  = clampScrollOffset(state, ScreenId::Installed, total, visible);
+
+        for (int i = 0; i < visible && (offset + i) < total; ++i) {
+            const auto& p = state.installed[offset + i];
+            float ry = listY + i * kRowStride;
+            RectF row{ x, ry, w - 12.0f, 36.0f };  // -12 to leave room for scrollbar
             r.fillRoundedRect(row, theme::COL_SURFACE_CONTAINER, 6.0f);
             r.drawText(p.name, { row.x + 12, row.y + 9, 200, 18 },
                        theme::COL_ON_SURFACE, 13.0f, Renderer::Regular);
@@ -193,8 +235,8 @@ void renderInstalled(Renderer& r, AppState& state, BackendBridge& bridge,
                        theme::COL_ON_SURFACE_VARIANT, 12.0f, Renderer::Regular);
             r.drawText(p.installedVersion, { row.x + 440, row.y + 9, 120, 18 },
                        theme::COL_ON_SURFACE_VARIANT, 12.0f, Renderer::Mono);
-            ry += 42;
         }
+        drawScrollbar(r, x + w - 4.0f, listY, listH, offset, total, visible);
     }
 }
 
@@ -252,39 +294,45 @@ void renderUpdates(Renderer& r, AppState& state, BackendBridge& bridge,
     }
 
     // Table rows
+    constexpr float kRowStride = kRowH + kRowGap;
     float rowY = tableY + 30;
-    int n = std::min((int)state.upgradable.size(), 20);
-    for (int i = 0; i < n; ++i) {
-        const auto& p = state.upgradable[i];
+    float listH = std::max(0.0f, h - (rowY - y) - 8.0f);
+    int   total   = (int)state.upgradable.size();
+    int   visible = std::max(1, (int)(listH / kRowStride));
+    int   offset  = clampScrollOffset(state, ScreenId::Updates, total, visible);
+
+    for (int i = 0; i < visible && (offset + i) < total; ++i) {
+        const auto& p = state.upgradable[offset + i];
+        float yRow = rowY + i * kRowStride;
 
         // Card background
-        RectF rowBg { x, rowY, w, kRowH };
+        RectF rowBg{ x, yRow, w - 12.0f, kRowH };
         r.fillRoundedRect(rowBg, 0xB2201F1F, theme::CARD_RADIUS);
         r.strokeRect(rowBg, 0x33404752, 1.0f, theme::CARD_RADIUS);
 
         // Col 0: Logo + name + publisher
-        RectF logoRect { x + 14, rowY + (kRowH - kLogoSize) / 2.0f, kLogoSize, kLogoSize };
+        RectF logoRect{ x + 14, yRow + (kRowH - kLogoSize) / 2.0f, kLogoSize, kLogoSize };
         drawLogoPlaceholder(r, logoRect, p.id, p.manager);
         std::string publisher = "Winget";
         if (auto dot = p.id.find('.'); dot != std::string::npos) publisher = p.id.substr(0, dot);
-        r.drawText(p.name, { x + 14 + kLogoSize + 12, rowY + 12, colW[0] - kLogoSize - 24, 20 },
+        r.drawText(p.name, { x + 14 + kLogoSize + 12, yRow + 12, colW[0] - kLogoSize - 24, 20 },
                    theme::COL_ON_SURFACE, 15.0f, Renderer::Regular);
-        r.drawText(publisher, { x + 14 + kLogoSize + 12, rowY + 34, colW[0] - kLogoSize - 24, 16 },
+        r.drawText(publisher, { x + 14 + kLogoSize + 12, yRow + 34, colW[0] - kLogoSize - 24, 16 },
                    theme::COL_ON_SURFACE_VARIANT, 11.0f, Renderer::Regular);
 
         // Col 1: Current
-        r.drawText(p.installedVersion, { x + colW[0], rowY + 22, colW[1], 20 },
+        r.drawText(p.installedVersion, { x + colW[0], yRow + 22, colW[1], 20 },
                    theme::COL_ON_SURFACE_VARIANT, 13.0f, Renderer::Mono);
         // Col 2: New
-        r.drawText(p.availableVersion, { x + colW[0] + colW[1], rowY + 22, colW[2], 20 },
+        r.drawText(p.availableVersion, { x + colW[0] + colW[1], yRow + 22, colW[2], 20 },
                    theme::COL_PRIMARY, 13.0f, Renderer::Mono);
 
         // Col 3: Source badge
-        RectF srcRect { x + colW[0] + colW[1] + colW[2] + 4, rowY + (kRowH - 18) / 2.0f, 80, 18 };
+        RectF srcRect{ x + colW[0] + colW[1] + colW[2] + 4, yRow + (kRowH - 18) / 2.0f, 80, 18 };
         drawSourceBadge(r, srcRect, p.manager);
 
         // Col 4: Action
-        RectF actRect { x + w - 140, rowY + (kRowH - 32) / 2.0f, 130, 32 };
+        RectF actRect{ x + w - 140, yRow + (kRowH - 32) / 2.0f, 130, 32 };
         bool inflight = false;
         int  liveProgress = 0;
         InstallState liveState = InstallState::Unknown;
@@ -323,9 +371,8 @@ void renderUpdates(Renderer& r, AppState& state, BackendBridge& bridge,
             pushRect(actRect, 200,
                      std::string("update:") + std::string(toString(p.manager)) + ":" + p.id);
         }
-
-        rowY += kRowH + kRowGap;
     }
+    drawScrollbar(r, x + w - 4.0f, rowY, listH, offset, total, visible);
 }
 
 // ---- Tasks ----
@@ -344,9 +391,17 @@ void renderTasks(Renderer& r, AppState& state, BackendBridge& bridge,
         r.drawText(t(keys::tasks_empty), { x, sy + 40, w, 20 },
                    theme::COL_ON_SURFACE_VARIANT, 13.0f, Renderer::Regular);
     } else {
-        float ry = sy + 40;
-        for (const auto& task : snap) {
-            RectF row { x, ry, w, 36 };
+        constexpr float kRowStride = 42.0f;
+        float listY = sy + 40;
+        float listH = std::max(0.0f, h - (listY - y) - 8.0f);
+        int   total   = (int)snap.size();
+        int   visible = std::max(1, (int)(listH / kRowStride));
+        int   offset  = clampScrollOffset(state, ScreenId::Tasks, total, visible);
+
+        for (int i = 0; i < visible && (offset + i) < total; ++i) {
+            const auto& task = snap[offset + i];
+            float ry = listY + i * kRowStride;
+            RectF row{ x, ry, w - 12.0f, 36.0f };
             r.fillRoundedRect(row, theme::COL_SURFACE_CONTAINER, 6.0f);
             char id[16]; std::snprintf(id, sizeof(id), "%llu", (unsigned long long)task.id);
             r.drawText(id, { row.x + 12, row.y + 9, 50, 18 },
@@ -361,13 +416,13 @@ void renderTasks(Renderer& r, AppState& state, BackendBridge& bridge,
                        { row.x + 370, row.y + 9, 100, 18 },
                        theme::COL_PRIMARY, 13.0f, Renderer::Regular);
             // Progress bar
-            RectF pb { row.x + 480, row.y + 13, 200, 10 };
+            RectF pb{ row.x + 480, row.y + 13, 200, 10 };
             r.fillRoundedRect(pb, theme::COL_SURFACE_CONTAINER_HIGHEST, 5.0f);
             float frac = task.progress / 100.0f;
             if (frac > 0.0f) r.fillRoundedRect({ pb.x, pb.y, pb.w * frac, pb.h },
                                                 theme::COL_PRIMARY_CONTAINER, 5.0f);
-            ry += 42;
         }
+        drawScrollbar(r, x + w - 4.0f, listY, listH, offset, total, visible);
     }
 }
 
