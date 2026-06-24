@@ -1,0 +1,68 @@
+# Project planning notes (kept local)
+plan.md
+
+# Build directories
+build/
+out/
+cmake-build-*/
+build-*/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Testing/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps
+
+# Visual Studio
+.vs/
+*.sln
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+*.pidb
+*.sdf
+*.opensdf
+*.pdb
+*.opendb
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+CMakeUserPresets.json
+CMakePresets.json
+
+# CLion / JetBrains
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Compiled output
+*.obj
+*.o
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.idb
+*.bsc
+
+# OS files
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Logs
+*.log

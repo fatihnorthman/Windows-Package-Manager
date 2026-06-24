@@ -1,0 +1,190 @@
+#include "Application.h"
+#include "Sidebar.h"
+#include "TopBar.h"
+#include "Footer.h"
+#include "Screens.h"
+#include "TaskDrawer.h"
+#include "../i18n.h"
+#include "../../core/Logger.h"
+#include <dwmapi.h>
+#include <windowsx.h>
+
+#pragma comment(lib, "dwmapi.lib")
+
+namespace pm::gui::win32 {
+
+namespace {
+Application* g_app = nullptr;
+}
+
+LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (!g_app) return ::DefWindowProc(hwnd, msg, wParam, lParam);
+
+    switch (msg) {
+        case WM_CREATE: return 0;
+
+        case WM_SIZE: {
+            UINT w = LOWORD(lParam);
+            UINT h = HIWORD(lParam);
+            g_app->renderer().resize(w, h);
+            return 0;
+        }
+
+        case WM_MOUSEMOVE: {
+            g_app->input().mouse.x = GET_X_LPARAM(lParam);
+            g_app->input().mouse.y = GET_Y_LPARAM(lParam);
+            g_app->input().mouseInside = true;
+            return 0;
+        }
+
+        case WM_MOUSELEAVE:
+            g_app->input().mouseInside = false;
+            return 0;
+
+        case WM_LBUTTONDOWN:
+            g_app->input().mouseDown = true;
+            return 0;
+
+        case WM_LBUTTONUP:
+            g_app->input().mouseDown = false;
+            g_app->handleMouseUp(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+            return 0;
+
+        case WM_KEYDOWN:
+            if (wParam == VK_SHIFT) g_app->input().shift = true;
+            if (wParam == VK_CONTROL) g_app->input().ctrl = true;
+            return 0;
+
+        case WM_KEYUP:
+            if (wParam == VK_SHIFT) g_app->input().shift = false;
+            if (wParam == VK_CONTROL) g_app->input().ctrl = false;
+            return 0;
+
+        case WM_NCHITTEST: {
+            // Force the top bar (y < 64) to behave like a caption, so the
+            // window can be dragged by the user. DWM sometimes returns
+            // HTCLIENT for the entire window which makes the title bar
+            // un-draggable.
+            POINT pt { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            ScreenToClient(hwnd, &pt);
+            if (pt.y >= 0 && pt.y < 64) return HTCAPTION;
+            return HTCLIENT;
+        }
+
+        case WM_NCCALCSIZE:
+        case WM_NCPAINT:
+            return ::DefWindowProc(hwnd, msg, wParam, lParam);
+
+        case WM_ERASEBKGND:
+            return 1;
+
+        case WM_DESTROY:
+            PostQuitMessage(0);
+            return 0;
+    }
+    return ::DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+Application::Application() = default;
+Application::~Application() = default;
+
+bool Application::init(HINSTANCE hInstance, int w, int h) {
+    if (!initWindow(hInstance, w, h)) return false;
+    if (!renderer_.init(hwnd_)) {
+        Logger::instance().error("D2D1 init failed");
+        return false;
+    }
+    bridge_.init();
+    bridge_.refreshUpgradable();
+    return true;
+}
+
+bool Application::initWindow(HINSTANCE hInstance, int w, int h) {
+    WNDCLASSEXW wc = {};
+    wc.cbSize        = sizeof(wc);
+    wc.style         = CS_HREDRAW | CS_VREDRAW;
+    wc.lpfnWndProc   = WndProc;
+    wc.hInstance     = hInstance;
+    wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.lpszClassName = L"PackageManagerClass";
+    if (!RegisterClassExW(&wc)) {
+        DWORD err = GetLastError();
+        if (err != ERROR_CLASS_ALREADY_EXISTS) {
+            Logger::instance().error("RegisterClassExW failed: ", err);
+            return false;
+        }
+    }
+
+    g_app = this;
+
+    RECT rc = {0, 0, w, h};
+    DWORD style = WS_OVERLAPPEDWINDOW;
+    AdjustWindowRect(&rc, style, FALSE);
+
+    hwnd_ = CreateWindowExW(
+        0, wc.lpszClassName, L"Unified Windows Package Manager",
+        style,
+        CW_USEDEFAULT, CW_USEDEFAULT,
+        rc.right - rc.left, rc.bottom - rc.top,
+        nullptr, nullptr, hInstance, nullptr);
+    if (!hwnd_) {
+        Logger::instance().error("CreateWindowExW failed: ", GetLastError());
+        return false;
+    }
+
+    ShowWindow(hwnd_, SW_SHOW);
+    UpdateWindow(hwnd_);
+    SetForegroundWindow(hwnd_);
+    SetFocus(hwnd_);
+    return true;
+}
+
+void Application::handleMouseUp(int x, int y) {
+    AppState& state = bridge_.state();
+    RECT rc; GetClientRect(hwnd_, &rc);
+    const float W = static_cast<float>(rc.right);
+    const float H = static_cast<float>(rc.bottom);
+    if (SidebarHitTest(x, y, state)) return;
+    if (TopBarHitTest(x, y, state)) return;
+    if (ScreenHitTest(x, y, state, bridge_)) return;
+    // TaskDrawer is drawn over content, so its hit-test is last (highest z).
+    if (TaskDrawer::hitTest(x, y, state, bridge_, W, H)) return;
+}
+
+void Application::renderFrame() {
+    renderer_.beginFrame();
+    renderer_.clear(theme::COL_BACKGROUND);
+
+    RECT rc; GetClientRect(hwnd_, &rc);
+    const float W = static_cast<float>(rc.right);
+    const float H = static_cast<float>(rc.bottom);
+
+    AppState& state = bridge_.state();
+
+    Sidebar::draw(renderer_, state, input_);
+    TopBar::draw(renderer_, state, input_, W);
+    Screens::draw(renderer_, state, bridge_, input_, W, H);
+    Footer::draw(renderer_, state, bridge_, W, H);
+    // Drawer overlays the content above the footer.
+    TaskDrawer::draw(renderer_, state, bridge_, input_, W, H);
+
+    renderer_.endFrame();
+}
+
+int Application::run() {
+    MSG msg = {};
+    while (true) {
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            if (msg.message == WM_QUIT) {
+                return static_cast<int>(msg.wParam);
+            }
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        renderFrame();
+        Sleep(1);
+    }
+}
+
+} // namespace pm::gui::win32
