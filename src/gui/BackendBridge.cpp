@@ -5,6 +5,7 @@
 #include "../core/Logger.h"
 #include "../core/ProcessRunner.h"
 #include <algorithm>
+#include <memory>
 #include <thread>
 
 namespace pm::gui {
@@ -62,37 +63,46 @@ void BackendBridge::detectTools() {
     }
 }
 
+// Shared merge state for an in-flight parallel adapter load.
+// Heap-allocated and captured by shared_ptr so the lambdas passed to the
+// adapters can keep using it safely after the dispatcher thread returns.
+// Previously these lived on the dispatcher's stack, which caused use-after-
+// free crashes when the adapter invoked the callback asynchronously.
+struct MergeCtx {
+    std::vector<PackageInfo>  merged;
+    std::string               firstError;
+    std::atomic<int>          remaining{0};
+    std::mutex                mergeMtx;
+};
+
 void BackendBridge::refreshInstalled() {
     if (state_.loadingInstalled.load()) return;
     state_.loadingInstalled = true;
     auto adapters = adapters_;
     AppState* st  = &state_;
-    std::thread([adapters, st]() {
-        std::vector<PackageInfo> merged;
-        std::string firstError;
-        std::atomic<int> remaining{static_cast<int>(adapters.size())};
-        std::mutex mergeMtx;
-
+    auto ctx      = std::make_shared<MergeCtx>();
+    ctx->remaining = static_cast<int>(adapters.size());
+    std::thread([adapters, st, ctx]() {
         for (const auto& a : adapters) {
-            a->listInstalled([st, &merged, &firstError, &remaining, &mergeMtx](
+            a->listInstalled([st, ctx](
                 std::vector<PackageInfo> pkgs, std::string err) {
                 {
-                    std::lock_guard<std::mutex> lk(mergeMtx);
+                    std::lock_guard<std::mutex> lk(ctx->mergeMtx);
                     if (err.empty()) {
-                        merged.insert(merged.end(),
-                                      std::make_move_iterator(pkgs.begin()),
-                                      std::make_move_iterator(pkgs.end()));
-                    } else if (firstError.empty()) {
-                        firstError = err;
+                        ctx->merged.insert(ctx->merged.end(),
+                                           std::make_move_iterator(pkgs.begin()),
+                                           std::make_move_iterator(pkgs.end()));
+                    } else if (ctx->firstError.empty()) {
+                        ctx->firstError = err;
                     }
                 }
-                if (--remaining == 0) {
+                if (--ctx->remaining == 0) {
                     std::lock_guard<std::mutex> lk(st->mtx);
-                    if (!merged.empty()) {
-                        st->installed = std::move(merged);
+                    if (!ctx->merged.empty()) {
+                        st->installed = std::move(ctx->merged);
                         st->lastError.clear();
                     } else {
-                        st->lastError = firstError.empty() ? "no installed packages found" : firstError;
+                        st->lastError = ctx->firstError.empty() ? "no installed packages found" : ctx->firstError;
                     }
                     st->loadingInstalled = false;
                 }
@@ -106,37 +116,32 @@ void BackendBridge::refreshUpgradable() {
     state_.loadingUpgradable = true;
     auto adapters = adapters_;
     AppState* st  = &state_;
-    std::thread([adapters, st]() {
-        std::vector<PackageInfo> merged;
-        std::string firstError;
-        std::atomic<int> remaining{static_cast<int>(adapters.size())};
-        std::mutex mergeMtx;
-
+    auto ctx      = std::make_shared<MergeCtx>();
+    ctx->remaining = static_cast<int>(adapters.size());
+    std::thread([adapters, st, ctx]() {
         for (const auto& a : adapters) {
-            a->listUpgradable([st, &merged, &firstError, &remaining, &mergeMtx](
+            a->listUpgradable([st, ctx](
                 std::vector<PackageInfo> pkgs, std::string err) {
                 {
-                    std::lock_guard<std::mutex> lk(mergeMtx);
+                    std::lock_guard<std::mutex> lk(ctx->mergeMtx);
                     if (err.empty()) {
-                        merged.insert(merged.end(),
-                                      std::make_move_iterator(pkgs.begin()),
-                                      std::make_move_iterator(pkgs.end()));
-                    } else if (firstError.empty()) {
-                        firstError = err;
+                        ctx->merged.insert(ctx->merged.end(),
+                                           std::make_move_iterator(pkgs.begin()),
+                                           std::make_move_iterator(pkgs.end()));
+                    } else if (ctx->firstError.empty()) {
+                        ctx->firstError = err;
                     }
                 }
-                if (--remaining == 0) {
+                if (--ctx->remaining == 0) {
                     std::lock_guard<std::mutex> lk(st->mtx);
-                    if (!merged.empty()) {
-                        st->upgradable = std::move(merged);
+                    if (!ctx->merged.empty()) {
+                        st->upgradable = std::move(ctx->merged);
                         st->lastError.clear();
                     } else {
-                        // No upgrades available is a valid state (every package
-                        // is current). Don't surface the last error in that case.
-                        if (merged.empty() && firstError.empty())
+                        if (ctx->merged.empty() && ctx->firstError.empty())
                             st->lastError.clear();
                         else
-                            st->lastError = firstError;
+                            st->lastError = ctx->firstError;
                     }
                     st->loadingUpgradable = false;
                 }
@@ -154,32 +159,29 @@ void BackendBridge::runSearch(const std::string& query) {
     }
     auto adapters = adapters_;
     AppState* st  = &state_;
-    std::thread([adapters, st, query]() {
-        std::vector<PackageInfo> merged;
-        std::string firstError;
-        std::atomic<int> remaining{static_cast<int>(adapters.size())};
-        std::mutex mergeMtx;
-
+    auto ctx      = std::make_shared<MergeCtx>();
+    ctx->remaining = static_cast<int>(adapters.size());
+    std::thread([adapters, st, ctx, query]() {
         for (const auto& a : adapters) {
-            a->search(query, [st, &merged, &firstError, &remaining, &mergeMtx](
+            a->search(query, [st, ctx](
                 std::vector<PackageInfo> pkgs, std::string err) {
                 {
-                    std::lock_guard<std::mutex> lk(mergeMtx);
+                    std::lock_guard<std::mutex> lk(ctx->mergeMtx);
                     if (err.empty()) {
-                        merged.insert(merged.end(),
-                                      std::make_move_iterator(pkgs.begin()),
-                                      std::make_move_iterator(pkgs.end()));
-                    } else if (firstError.empty()) {
-                        firstError = err;
+                        ctx->merged.insert(ctx->merged.end(),
+                                           std::make_move_iterator(pkgs.begin()),
+                                           std::make_move_iterator(pkgs.end()));
+                    } else if (ctx->firstError.empty()) {
+                        ctx->firstError = err;
                     }
                 }
-                if (--remaining == 0) {
+                if (--ctx->remaining == 0) {
                     std::lock_guard<std::mutex> lk(st->mtx);
-                    if (!merged.empty()) {
-                        st->searchResults = std::move(merged);
+                    if (!ctx->merged.empty()) {
+                        st->searchResults = std::move(ctx->merged);
                     } else {
                         st->searchResults.clear();
-                        st->lastError = firstError;
+                        st->lastError = ctx->firstError;
                     }
                     st->loadingSearch = false;
                 }
