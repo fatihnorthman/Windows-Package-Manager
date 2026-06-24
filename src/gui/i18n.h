@@ -48,6 +48,9 @@ namespace keys {
     constexpr std::string_view updates_btn_queued = "updates_btn_queued";
     constexpr std::string_view updates_btn_done   = "updates_btn_done";
 
+    constexpr std::string_view discover_btn_install   = "discover_btn_install";
+    constexpr std::string_view discover_btn_installing = "discover_btn_installing";
+
     constexpr std::string_view tasks_title        = "tasks_title";
     constexpr std::string_view tasks_subtitle     = "tasks_subtitle";
     constexpr std::string_view tasks_empty        = "tasks_empty";

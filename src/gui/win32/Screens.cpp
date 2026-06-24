@@ -264,30 +264,92 @@ void renderDiscover(Renderer& r, AppState& state, BackendBridge& bridge,
         r.drawText(t(keys::discover_empty), { x, sy + 50, w, 30 },
                    theme::COL_ON_SURFACE_VARIANT, 13.0f, Renderer::Regular);
     } else {
-        constexpr float kRowStride = 42.0f;
+        constexpr float kRowStride = 48.0f;
         float listY = sy + 50;
         float listH = std::max(0.0f, h - (listY - y) - 8.0f);
         int   total   = (int)state.searchResults.size();
         int   visible = std::max(1, (int)(listH / kRowStride));
         int   offset  = clampScrollOffset(state, ScreenId::Discover, total, visible);
 
+        // Snapshot the tasks once for the whole list so we can match
+        // each result row to its install/queue state without
+        // re-locking per row.
+        auto taskSnap = bridge.snapshotTasks();
+
         for (int i = 0; i < visible && (offset + i) < total; ++i) {
             const auto& p = state.searchResults[offset + i];
             float ry = listY + i * kRowStride;
-            RectF row{ x, ry, w - 12.0f, 36.0f };
+            RectF row{ x, ry, w - 12.0f, 42.0f };
             r.fillRectLinearV(row,
                               theme::COL_CARD_GRAD_TOP, theme::COL_CARD_GRAD_BOT,
                               6.0f);
             r.strokeRect(row, theme::COL_OUTLINE_VARIANT, 1.0f, 6.0f);
-            r.drawText(p.name, { row.x + 12, row.y + 9, 200, 18 },
+            r.drawText(p.name, { row.x + 12, row.y + 9, 240, 18 },
                        theme::COL_ON_SURFACE, 13.0f, Renderer::Regular);
-            r.drawText(p.id, { row.x + 220, row.y + 9, 200, 18 },
-                       theme::COL_ON_SURFACE_VARIANT, 12.0f, Renderer::Regular);
-            RectF ibtn{ row.x + row.w - 100, row.y + 4, 90, 28 };
-            bool hov = input.mouseInside && RectContains(ibtn, input.mouse.x, input.mouse.y);
-            drawButton(r, ibtn, t(keys::updates_btn_update), false, input, hov);
-            pushRect(ibtn, 200,
-                     std::string("install:") + std::string(toString(p.manager)) + ":" + p.id);
+            r.drawText(p.id, { row.x + 12, row.y + 25, 240, 14 },
+                       theme::COL_ON_SURFACE_VARIANT, 11.0f, Renderer::Regular);
+            r.drawText(p.installedVersion.empty() ? std::string("--")
+                                                    : p.installedVersion,
+                       { row.x + 260, row.y + 9, 100, 18 },
+                       theme::COL_ON_SURFACE_VARIANT, 12.0f, Renderer::Mono);
+
+            RectF ibtn{ row.x + row.w - 100, row.y + 7, 90, 28 };
+
+            // Look up the task state for this package so the button
+            // can show progress / queued / done locally without
+            // forcing the user to switch to the Tasks screen.
+            bool       inflight    = false;
+            int        liveProgress = 0;
+            InstallState liveState  = InstallState::Unknown;
+            {
+                std::lock_guard<std::mutex> lk(state.mtx);
+                for (const auto& key : state.inFlight) {
+                    if (key.id == p.id && key.manager == p.manager) {
+                        inflight = true;
+                        break;
+                    }
+                }
+            }
+            for (const auto& tt : taskSnap) {
+                if (tt.package.id == p.id && tt.package.manager == p.manager) {
+                    liveProgress = tt.progress;
+                    liveState    = tt.state;
+                    break;
+                }
+            }
+
+            if (inflight
+                || liveState == InstallState::Installing
+                || liveState == InstallState::Updating) {
+                r.fillRoundedRect(ibtn, theme::COL_SURFACE_CONTAINER_HIGHEST, 4.0f);
+                float frac = std::clamp(liveProgress, 0, 100) / 100.0f;
+                if (frac > 0.0f) {
+                    r.fillRoundedRect({ ibtn.x, ibtn.y, ibtn.w * frac, ibtn.h },
+                                      theme::COL_PRIMARY_CONTAINER, 4.0f);
+                }
+                char pct[16];
+                std::snprintf(pct, sizeof(pct), "%s %d%%",
+                              t(keys::discover_btn_installing).c_str(),
+                              liveProgress);
+                r.drawText(pct, ibtn, theme::COL_ON_SURFACE,
+                           10.0f, Renderer::Bold, true, true);
+            } else if (liveState == InstallState::Installed) {
+                r.drawText(std::wstring(mdl2::CheckMark) + L"  " +
+                           std::wstring(t(keys::updates_btn_done).begin(),
+                                        t(keys::updates_btn_done).end()),
+                           ibtn, theme::COL_SUCCESS,
+                           11.0f, Renderer::Bold, true, true);
+            } else if (inflight || liveState == InstallState::Queued) {
+                r.drawText(t(keys::updates_btn_queued), ibtn,
+                           theme::COL_ON_SURFACE_VARIANT,
+                           11.0f, Renderer::Bold, true, true);
+            } else {
+                bool hov = input.mouseInside
+                         && RectContains(ibtn, input.mouse.x, input.mouse.y);
+                drawButton(r, ibtn, t(keys::discover_btn_install), false, input, hov);
+                pushRect(ibtn, 200,
+                         std::string("install:") + std::string(toString(p.manager)) + ":" + p.id);
+            }
         }
         drawScrollbar(r, x + w - 4.0f, listY, listH, offset, total, visible);
     }

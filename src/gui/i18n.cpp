@@ -40,6 +40,9 @@ const std::unordered_map<std::string, std::string> en = {
     {"updates_btn_queued", "Queued"},
     {"updates_btn_done",   "Done"},
 
+    {"discover_btn_install",   "Install"},
+    {"discover_btn_installing", "Installing..."},
+
     {"tasks_title",        "Active Tasks & Queue"},
     {"tasks_subtitle",     "Live status of all running, queued, and completed operations."},
     {"tasks_empty",        "The task queue is empty."},
@@ -104,6 +107,9 @@ const std::unordered_map<std::string, std::string> tr = {
     {"updates_btn_update", "Guncelle"},
     {"updates_btn_queued", "Kuyrukta"},
     {"updates_btn_done",   "Tamamlandi"},
+
+    {"discover_btn_install",   "Kur"},
+    {"discover_btn_installing", "Kuruluyor..."},
 
     {"tasks_title",        "Aktif Gorevler ve Kuyruk"},
     {"tasks_subtitle",     "Calisan, kuyrukta ve tamamlanan tum islemlerin canli durumu."},
