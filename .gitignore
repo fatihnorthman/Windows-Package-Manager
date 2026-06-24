@@ -66,3 +66,7 @@ desktop.ini
 
 # Logs
 *.log
+
+# UI test artifacts (PowerShell screenshot captures)
+uitest_*.png
+final_*.png
