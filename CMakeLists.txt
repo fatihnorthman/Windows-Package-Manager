@@ -27,6 +27,7 @@ add_executable(PackageManager WIN32
     src/gui/win32/TopBar.cpp
     src/gui/win32/Footer.cpp
     src/gui/win32/Screens.cpp
+    src/gui/win32/TaskDrawer.cpp
 )
 target_include_directories(PackageManager PRIVATE src)
 if(WIN32)
