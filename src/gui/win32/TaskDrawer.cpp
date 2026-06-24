@@ -1,4 +1,5 @@
 #include "TaskDrawer.h"
+#include "ClickRects.h"
 #include "../i18n.h"
 #include "Theme.h"
 #include <algorithm>
@@ -12,6 +13,7 @@ namespace mdl2 {
     constexpr const wchar_t* ChevronUp = L"\uE70E";
     constexpr const wchar_t* ChevronDn = L"\uE70D";
     constexpr const wchar_t* Cancel    = L"\uE894";
+    constexpr const wchar_t* Refresh   = L"\uE72C";
 }
 
 namespace {
@@ -63,6 +65,42 @@ uint32_t stateColor(InstallState s) {
         case InstallState::Updating:
         case InstallState::Installing:return theme::COL_PRIMARY;
         default:                      return theme::COL_ON_SURFACE_VARIANT;
+    }
+}
+
+// Tooltip state — set per frame from the hovered row so we can
+// show the full error message of a failed task. Reset on each draw.
+struct HoverState {
+    bool      hasMessage = false;
+    std::string message;
+    int       mouseX = 0;
+    int       mouseY = 0;
+};
+HoverState g_hover;
+
+// Word-wrap a long string into roughly `width`-character chunks and
+// render each on its own line. Stops at `maxLines` lines.
+void drawWrappedText(Renderer& r, const std::string& text,
+                     RectF rect, int charsPerLine, int maxLines,
+                     uint32_t color, Renderer::FontStyle style, float fontSize) {
+    std::string remaining = text;
+    float lineH = fontSize + 4;
+    for (int li = 0; li < maxLines && !remaining.empty(); ++li) {
+        std::string chunk;
+        if ((int)remaining.size() <= charsPerLine) {
+            chunk = remaining;
+            remaining.clear();
+        } else {
+            size_t cut = charsPerLine;
+            while (cut > 0 && cut < remaining.size() && remaining[cut] != ' ') --cut;
+            if (cut == 0) cut = charsPerLine;
+            chunk = remaining.substr(0, cut);
+            remaining = remaining.substr(cut);
+            if (!remaining.empty() && remaining[0] == ' ') remaining = remaining.substr(1);
+        }
+        r.drawText(chunk,
+                   { rect.x, rect.y + li * lineH, rect.w, lineH },
+                   color, fontSize, style);
     }
 }
 
@@ -118,6 +156,10 @@ float TaskDrawer::draw(Renderer& r, AppState& state, BackendBridge& bridge,
                theme::COL_ON_SURFACE_VARIANT, 14.0f, Renderer::Icon);
 
     // --- Expanded body ---
+    // Reset per-frame hover state. The loop below sets g_hover when
+    // the cursor is over a failed task row so we can draw a tooltip
+    // at the end of the function.
+    g_hover = HoverState{};
     if (state.tasksDrawerOpen) {
         float bodyY = drawY + kCollapsedH + 4;
         float bodyH = headerH - kCollapsedH - 4;
@@ -135,11 +177,14 @@ float TaskDrawer::draw(Renderer& r, AppState& state, BackendBridge& bridge,
             for (int i = startIdx; i < (int)snap.size(); ++i) {
                 const auto& t = snap[i];
                 float ry = bodyY + (i - startIdx) * rowH;
-                RectF row { drawX + 8, ry, kDrawerW - 16, rowH - 4.0f };
+                RectF row{ drawX + 8, ry, kDrawerW - 16, rowH - 4.0f };
+                bool rowHover = input.mouseInside
+                             && input.mouse.x >= row.x && input.mouse.x <= row.x + row.w
+                             && input.mouse.y >= row.y && input.mouse.y <= row.y + row.h;
                 r.fillRoundedRect(row, theme::COL_SURFACE_CONTAINER, 4.0f);
 
                 // Manager badge (left)
-                RectF bg { row.x + 8, row.y + (row.h - 16) / 2.0f, 56, 16 };
+                RectF bg{ row.x + 8, row.y + (row.h - 16) / 2.0f, 56, 16 };
                 r.fillRoundedRect(bg, managerBadgeBg(t.package.manager), 4.0f);
                 r.drawText(managerBadge(t.package.manager), bg,
                            managerBadgeText(t.package.manager),
@@ -147,7 +192,7 @@ float TaskDrawer::draw(Renderer& r, AppState& state, BackendBridge& bridge,
 
                 // Package id
                 r.drawText(t.package.id,
-                           { row.x + 72, row.y + 4, kDrawerW - 200, 16 },
+                           { row.x + 72, row.y + 4, kDrawerW - 230, 16 },
                            theme::COL_ON_SURFACE, 12.0f, Renderer::Regular);
 
                 // Action label (small caps)
@@ -157,7 +202,7 @@ float TaskDrawer::draw(Renderer& r, AppState& state, BackendBridge& bridge,
                            theme::COL_ON_SURFACE_VARIANT, 10.0f, Renderer::Regular);
 
                 // Progress bar (right portion)
-                RectF pb { row.x + kDrawerW - 130, row.y + (row.h - 8) / 2.0f, 60, 8 };
+                RectF pb{ row.x + kDrawerW - 130, row.y + (row.h - 8) / 2.0f, 60, 8 };
                 r.fillRoundedRect(pb, theme::COL_SURFACE_CONTAINER_HIGHEST, 4.0f);
                 if (t.progress > 0) {
                     float frac = std::clamp(t.progress, 0, 100) / 100.0f;
@@ -171,7 +216,66 @@ float TaskDrawer::draw(Renderer& r, AppState& state, BackendBridge& bridge,
                 r.drawText(pct,
                            { row.x + kDrawerW - 66, row.y + 4, 60, 16 },
                            stateColor(t.state), 10.0f, Renderer::Bold);
+
+                // Retry button for failed tasks. We reserve a 64x18
+                // clickable area on the right side; a green-bordered
+                // pill so it reads as a recovery action rather than
+                // an info line.
+                if (t.state == InstallState::Failed) {
+                    RectF retry{ row.x + row.w - 60, row.y + (row.h - 18) / 2.0f, 56, 18 };
+                    if (rowHover) {
+                        r.fillRoundedRect(retry, 0x4014B850, 9.0f);
+                    }
+                    r.strokeRect(retry, 0xFF66BB6A, 1.0f, 9.0f);
+                    r.drawText(currentLang() == Lang::En ? "Retry" : "Yenile",
+                               retry, theme::COL_SUCCESS,
+                               10.0f, Renderer::Bold, true, true);
+                    pushClickRect({ retry.x, retry.y, retry.w, retry.h, 300,
+                                   std::string("retry:") + std::to_string(t.id) });
+
+                    // If the cursor is over this failed row, queue
+                    // the tooltip so the caller draws it on top of
+                    // everything.
+                    if (rowHover && !t.message.empty()) {
+                        g_hover.hasMessage = true;
+                        g_hover.message    = t.message;
+                        g_hover.mouseX     = input.mouse.x;
+                        g_hover.mouseY     = input.mouse.y;
+                    }
+                }
             }
+        }
+
+        // Draw the failure tooltip on top of the rows so it sits
+        // above the card surface.
+        if (g_hover.hasMessage) {
+            const float padX = 10.0f, padY = 8.0f;
+            const int charsPerLine = 56;
+            const int maxLines = 4;
+            float lineH = 14.0f;
+            // Pre-compute height to size the box.
+            int lines = 1;
+            for (size_t i = charsPerLine; i < g_hover.message.size(); i += charsPerLine) ++lines;
+            if (lines > maxLines) lines = maxLines;
+            const float w = 380.0f;
+            const float h = padY * 2 + lines * lineH + 18;  // +18 for header
+            float tx = (float)g_hover.mouseX + 14;
+            float ty = (float)g_hover.mouseY - h - 8;
+            if (ty < 0) ty = (float)g_hover.mouseY + 18;
+            r.fillRoundedRect({ tx, ty, w, h }, 0xE61A1714, 6.0f);
+            r.strokeRect({ tx, ty, w, h }, 0xFF8E2820, 1.0f, 6.0f);
+            // Header line
+            r.drawText(std::wstring(mdl2::CheckMark) + L"",
+                       { tx + padX, ty + padY - 2, 16, 16 },
+                       theme::COL_ERROR, 12.0f, Renderer::Icon);
+            r.drawText(currentLang() == Lang::En ? "Error" : "Hata",
+                       { tx + padX + 18, ty + padY - 2, 200, 16 },
+                       theme::COL_ERROR, 11.0f, Renderer::Bold);
+            // Body
+            drawWrappedText(r, g_hover.message,
+                            { tx + padX, ty + padY + 16, w - padX * 2, h - padY - 16 },
+                            charsPerLine, maxLines,
+                            theme::COL_ON_SURFACE, Renderer::Regular, 10.0f);
         }
 
         // Cancel-all footer

@@ -1,4 +1,5 @@
 #include "Screens.h"
+#include "ClickRects.h"
 #include "../i18n.h"
 #include "Theme.h"
 #include <cstdio>
@@ -64,18 +65,18 @@ int clampScrollOffset(AppState& state, ScreenId id, int total, int visible) {
 }
 
 // Track clickable button regions in the active screen so we can hit-test them.
-struct ClickRect {
+struct ClickRectInternal {
     RectF  bounds;
-    int    id;       // semantic id (Update=1, UpdateAll=2, NavItem=3, etc.)
-    std::string payload;  // e.g. package id
+    int    id;
+    std::string payload;
 };
-std::vector<ClickRect>& clickRects() {
-    static std::vector<ClickRect> v;
+std::vector<ClickRectInternal>& clickRects() {
+    static std::vector<ClickRectInternal> v;
     return v;
 }
 void clearRects() { clickRects().clear(); }
-void pushRect(const RectF& r, int id, const std::string& payload = "") {
-    clickRects().push_back({r, id, payload});
+static void pushRect(const RectF& r, int id, const std::string& payload = "") {
+    clickRects().push_back({ r, id, payload });
 }
 
 // ---- helpers ----
@@ -696,6 +697,14 @@ void renderSettings(Renderer& r, AppState& state, BackendBridge& bridge,
 
 } // anonymous
 
+// External entry point: another TU (e.g. TaskDrawer) can register a
+// clickable rectangle without taking a dependency on Screens internals.
+// Forwards into the same clickRects() vector that the dispatcher
+// below iterates.
+void pushClickRect(const ClickRect& r) {
+    clickRects().push_back({ {r.x, r.y, r.w, r.h}, r.id, r.payload });
+}
+
 void Screens::draw(Renderer& r, AppState& state, BackendBridge& bridge,
                    const InputState& input, float W, float H) {
     clearRects();
@@ -748,10 +757,26 @@ bool ScreenHitTest(int x, int y, AppState& state, BackendBridge& bridge) {
                             else if (action == "install") bridge.enqueueInstallOne(pkg);
                             return true;
                         }
-                case 300:  // language toggle
-                    if (r.payload == "lang_en") setLang(Lang::En);
-                    else if (r.payload == "lang_tr") setLang(Lang::Tr);
+                case 300: {  // language toggle OR task retry (payload "lang_en" / "retry:<id>")
+                    if (r.payload == "lang_en") { setLang(Lang::En); return true; }
+                    if (r.payload == "lang_tr") { setLang(Lang::Tr); return true; }
+                    if (r.payload.rfind("retry:", 0) == 0) {
+                        // Find the failed task and re-enqueue its action.
+                        TaskId id = std::stoull(r.payload.substr(6));
+                        auto tasks = bridge.snapshotTasks();
+                        for (const auto& t : tasks) {
+                            if (t.id == id && t.state == InstallState::Failed) {
+                                if (t.action == TaskAction::Upgrade) {
+                                    bridge.enqueueUpgradeOne(t.package);
+                                } else if (t.action == TaskAction::Install) {
+                                    bridge.enqueueInstallOne(t.package);
+                                }
+                                return true;
+                            }
+                        }
+                    }
                     return true;
+                }
             }
         }
     }
