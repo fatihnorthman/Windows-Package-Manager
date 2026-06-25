@@ -77,3 +77,14 @@ scoop_test.json
 choco_test.json
 *.export.json
 packages.json
+
+# Crash logs and mini-dumps
+crash.dmp
+crash.log
+*.dmp
+
+# Python virtual environments & cache
+venv/
+.venv/
+__pycache__/
+*.pyc

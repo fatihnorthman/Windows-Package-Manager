@@ -49,6 +49,9 @@ public:
     // Best-effort termination of the running process.
     void cancel();
 
+    // Cancel all running processes immediately.
+    static void cancelAll();
+
     bool isRunning() const { return running_.load(); }
 
 private:

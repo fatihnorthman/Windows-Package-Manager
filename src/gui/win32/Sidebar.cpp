@@ -30,37 +30,32 @@ constexpr NavItem kItems[] = {
     { ScreenId::Settings,  mdl2::Settings,  keys::nav_settings,  nullptr },
 };
 
-// Layout (matches Stitch HTML: w-64, stack-md padding, etc.)
-constexpr float kSidebarW    = theme::SIDEBAR_W;
-constexpr float kTitleX      = 16.0f;
-constexpr float kTitleY      = 18.0f;
-constexpr float kItemX       = 12.0f;
-constexpr float kItemY       = 92.0f;
-constexpr float kItemW       = kSidebarW - 2 * kItemX;
-constexpr float kItemH       = 40.0f;
-constexpr float kItemGap     = 4.0f;
+// Layout for the floating compact sidebar dock
+constexpr float kSidebarW    = theme::SIDEBAR_W; // 80.0f
+constexpr float kDockX       = 12.0f;
+constexpr float kDockW       = kSidebarW - 2 * kDockX; // 56.0f
+constexpr float kItemX       = 18.0f;
+constexpr float kItemW       = 44.0f;
+constexpr float kItemH       = 44.0f;
+constexpr float kItemY       = 80.0f;
+constexpr float kItemGap     = 12.0f;
 } // anonymous
 
 void Sidebar::draw(Renderer& r, AppState& state, const InputState& input) {
     RECT rcw; GetClientRect(r.hwnd(), &rcw);
     float H = static_cast<float>(rcw.bottom);
 
-    // Sidebar background — left-to-right gradient that recedes slightly
-    // into shadow on the right edge, where the content panel meets it.
-    r.fillRectLinearH({ 0, 0, kSidebarW, H },
-                      theme::COL_SIDEBAR_GRAD_L, theme::COL_SIDEBAR_GRAD_R);
+    // Floating Glass Sidebar Dock
+    RectF dockRect{ kDockX, 12.0f, kDockW, H - 24.0f };
+    r.fillRoundedRect(dockRect, theme::COL_GLASS_CARD_BG, 16.0f);
+    r.strokeRect(dockRect, theme::COL_GLASS_CARD_BORDER, 1.0f, 16.0f);
 
-    // Right border separator
-    r.fillRect({ kSidebarW - 1, 0, 1, H }, theme::COL_OUTLINE_VARIANT);
-
-    // App title (primary)
-    r.drawText(t(keys::app_title), { kTitleX, kTitleY, kSidebarW - 32, 24 },
-               theme::COL_PRIMARY, 18.0f, Renderer::Bold);
-    r.drawText(t(keys::app_version), { kTitleX, kTitleY + 24, kSidebarW - 32, 16 },
-               theme::COL_ON_SURFACE_VARIANT, 11.0f, Renderer::Regular);
-
-    // Separator after title
-    r.fillRect({ kTitleX, kTitleY + 50, kSidebarW - 32, 1 }, theme::COL_OUTLINE_VARIANT);
+    // Top Brand Logo Icon
+    RectF logoRect{ kDockX + 8.0f, 24.0f, 40.0f, 40.0f };
+    r.fillRoundedRect(logoRect, theme::COL_PRIMARY_CONTAINER, 12.0f);
+    r.strokeRect(logoRect, theme::COL_PRIMARY, 1.0f, 12.0f);
+    // Draw "PM" in bold
+    r.drawText(L"PM", logoRect, theme::COL_ON_PRIMARY_CONTAINER, 14.0f, Renderer::Bold, true, true);
 
     // Nav items
     for (size_t i = 0; i < std::size(kItems); ++i) {
@@ -69,59 +64,34 @@ void Sidebar::draw(Renderer& r, AppState& state, const InputState& input) {
         RectF itemRect { kItemX, y, kItemW, kItemH };
         bool isActive = (state.currentScreen == item.id);
         bool isHover  = !isActive && input.mouseInside
-                        && input.mouse.x >= itemRect.x
-                        && input.mouse.x <= itemRect.x + itemRect.w
-                        && input.mouse.y >= itemRect.y
-                        && input.mouse.y <= itemRect.y + itemRect.h;
+                        && static_cast<float>(input.mouse.x) >= itemRect.x
+                        && static_cast<float>(input.mouse.x) <= itemRect.x + itemRect.w
+                        && static_cast<float>(input.mouse.y) >= itemRect.y
+                        && static_cast<float>(input.mouse.y) <= itemRect.y + itemRect.h;
 
-        // Background — vertical gradient on the active/hover item to
-        // give a sense of weight. Transparent (no draw) otherwise.
+        // Glass background with vertical linear gradient
         if (isActive) {
-            r.fillRectLinearV(itemRect,
-                              0xFF0086EE,  // slightly lighter top
-                              theme::COL_PRIMARY_CONTAINER,
-                              8.0f);
+            r.fillRectLinearV(itemRect, 0xFF0086EE, theme::COL_PRIMARY_CONTAINER, 12.0f);
+            r.strokeRect(itemRect, theme::COL_PRIMARY, 1.0f, 12.0f);
         } else if (isHover) {
-            r.fillRectLinearV(itemRect,
-                              theme::COL_SECONDARY_CONTAINER,
-                              0xFF3A3938,
-                              8.0f);
+            r.fillRoundedRect(itemRect, theme::COL_GLASS_CARD_HOVER_BG, 12.0f);
+            r.strokeRect(itemRect, theme::COL_GLASS_CARD_HOVER_BORDER, 1.0f, 12.0f);
         }
 
-        // Icon + label + (optional) badge
+        // Centered Nav Icon
         uint32_t textColor = isActive ? theme::COL_ON_PRIMARY_CONTAINER : theme::COL_ON_SURFACE_VARIANT;
-        r.drawText(std::wstring(item.icon), { itemRect.x + 12, itemRect.y + 8, 24, 24 },
-                   textColor, 16.0f, Renderer::Icon);
+        r.drawText(std::wstring(item.icon), itemRect, textColor, 16.0f, Renderer::Icon, true, true);
 
-        std::string label = t(item.key);
-        r.drawText(label, { itemRect.x + 40, itemRect.y + 11, itemRect.w - 80, 20 },
-                   textColor, 14.0f, isActive ? Renderer::Bold : Renderer::Regular);
-
-        if (item.badge) {
-            char buf[8];
-            std::snprintf(buf, sizeof(buf), " %s ", item.badge);
-            // Badge: small pill on the right
-            float bw = 24.0f;
-            r.fillRoundedRect({ itemRect.x + itemRect.w - bw - 8, itemRect.y + 9, bw, 22 },
-                              isActive ? 0x33FFFFFF : theme::COL_SURFACE_CONTAINER_HIGH, 11.0f);
-            r.drawText(buf, { itemRect.x + itemRect.w - bw - 8, itemRect.y + 12, bw, 18 },
-                       isActive ? theme::COL_ON_PRIMARY_CONTAINER : theme::COL_ON_SURFACE_VARIANT,
-                       11.0f, Renderer::Bold, true, true);
-        }
-
-        // Dynamic badge for Updates tab: show the count of upgradable packages.
+        // Notification dot/badge in top-right corner of the icon
+        int count = 0;
         if (item.id == ScreenId::Updates) {
-            int count = static_cast<int>(state.upgradable.size());
-            if (count > 0) {
-                char buf[8];
-                std::snprintf(buf, sizeof(buf), "%d", count);
-                float bw = (count >= 100) ? 32.0f : 24.0f;
-                r.fillRoundedRect({ itemRect.x + itemRect.w - bw - 8, itemRect.y + 9, bw, 22 },
-                                  isActive ? 0x33FFFFFF : theme::COL_SURFACE_CONTAINER_HIGH, 11.0f);
-                r.drawText(buf, { itemRect.x + itemRect.w - bw - 8, itemRect.y + 12, bw, 18 },
-                           isActive ? theme::COL_ON_PRIMARY_CONTAINER : theme::COL_ON_SURFACE_VARIANT,
-                           11.0f, Renderer::Bold, true, true);
-            }
+            count = static_cast<int>(state.upgradable.size());
+        }
+        
+        if (count > 0) {
+            float dotSize = 8.0f;
+            RectF dotRect { itemRect.x + itemRect.w - dotSize - 4.0f, itemRect.y + 4.0f, dotSize, dotSize };
+            r.fillRoundedRect(dotRect, theme::COL_ERROR, 999.0f);
         }
     }
 }

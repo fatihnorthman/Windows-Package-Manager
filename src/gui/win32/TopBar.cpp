@@ -84,34 +84,43 @@ void drawWinButton(Renderer& r, const RectF& rect, const wchar_t* glyph,
 
 void TopBar::draw(Renderer& r, AppState& state, const InputState& input,
                   float windowW, bool maximized) {
-    float barW = windowW - kTopBarX;
+    (void)windowW;
+    (void)maximized;
 
-    // Surface background — starts after the sidebar so the sidebar
-    // painting pass stays visible on the left. Subtle vertical gradient
-    // gives the bar a slightly lit-from-above feel that ties into the
-    // primary accent line below.
-    r.fillRectLinearV({ kTopBarX, 0, barW, theme::TOPBAR_H },
-                      theme::COL_TOPBAR_GRAD_TOP, theme::COL_TOPBAR_GRAD_BOT);
-
-    // 2px primary accent along the very top edge.
-    r.fillRect({ kTopBarX, 0, barW, 2 }, theme::COL_PRIMARY_CONTAINER);
-
-    // Bottom border separating title strip from content.
-    r.fillRect({ kTopBarX, theme::TOPBAR_H - 1, barW, 1 }, theme::COL_OUTLINE_VARIANT);
+    // We let the background mesh gradient flow underneath, keeping the top bar completely transparent.
 
     // ---- Search box (left, after sidebar) ----
     float sx = kTopBarX + kPadX;
     float sy = kPadY;
     RectF sBox{ sx, sy, kSearchW, kSearchH };
-    r.fillRectLinearV(sBox,
-                      0xFF323232,  // slightly lighter top
-                      theme::COL_SURFACE_CONTAINER_HIGH,
-                      8.0f);
-    r.strokeRect(sBox, theme::COL_OUTLINE_VARIANT, 1.0f, 8.0f);
+    state.searchInput.tbX = sx;
+    state.searchInput.tbY = sy;
+    state.searchInput.tbW = kSearchW;
+    state.searchInput.tbH = kSearchH;
+    state.searchInput.tbValid = true;
+
+    bool isTbFocused = state.searchInput.focused;
+    if (isTbFocused) {
+        r.fillRoundedRect(sBox, theme::COL_GLASS_CARD_HOVER_BG, 8.0f);
+        r.strokeRect(sBox, theme::COL_PRIMARY, 1.5f, 8.0f);
+    } else {
+        r.fillRoundedRect(sBox, theme::COL_GLASS_CARD_BG, 8.0f);
+        r.strokeRect(sBox, theme::COL_GLASS_CARD_BORDER, 1.0f, 8.0f);
+    }
     r.drawText(std::wstring(mdl2::Search), { sx + 14, sy + 9, 18, 18 },
                theme::COL_ON_SURFACE_VARIANT, 14.0f, Renderer::Icon);
-    r.drawText(t(keys::top_search_ph), { sx + 40, sy + 9, kSearchW - 56, 18 },
-               theme::COL_ON_SURFACE_VARIANT, 13.0f, Renderer::Regular);
+
+    if (state.searchInput.text.empty() && !isTbFocused) {
+        r.drawText(t(keys::top_search_ph), { sx + 40, sy + 9, kSearchW - 56, 18 },
+                   theme::COL_ON_SURFACE_VARIANT, 13.0f, Renderer::Regular);
+    } else {
+        r.drawText(state.searchInput.text, { sx + 40, sy + 9, kSearchW - 56, 18 },
+                   theme::COL_ON_SURFACE, 13.0f, Renderer::Regular);
+        if (isTbFocused) {
+            float cursorX = sx + 40 + r.measureTextWidth(state.searchInput.text, 13.0f, Renderer::Regular);
+            r.fillRect({ cursorX, sy + 8, 1.5f, 20 }, theme::COL_PRIMARY);
+        }
+    }
 
     // ---- Center: screen title + count pill ----
     auto meta = screenMeta(state);
@@ -148,7 +157,15 @@ void TopBar::draw(Renderer& r, AppState& state, const InputState& input,
         bool hover = input.mouseInside
                   && input.mouse.x >= btn.x && input.mouse.x <= btn.x + btn.w
                   && input.mouse.y >= btn.y && input.mouse.y <= btn.y + btn.h;
-        if (hover) r.fillRoundedRect(btn, theme::COL_SURFACE_CONTAINER_HIGHEST, 8.0f);
+        
+        if (hover) {
+            r.fillRoundedRect(btn, theme::COL_GLASS_CARD_HOVER_BG, 8.0f);
+            r.strokeRect(btn, theme::COL_GLASS_CARD_HOVER_BORDER, 1.0f, 8.0f);
+        } else {
+            r.fillRoundedRect(btn, theme::COL_GLASS_CARD_BG, 8.0f);
+            r.strokeRect(btn, theme::COL_GLASS_CARD_BORDER, 1.0f, 8.0f);
+        }
+        
         r.drawText(std::wstring(icons[i]), { btn.x + 9, btn.y + 7, 18, 22 },
                    hover ? theme::COL_ON_SURFACE : theme::COL_ON_SURFACE_VARIANT,
                    16.0f, Renderer::Icon);
@@ -157,25 +174,48 @@ void TopBar::draw(Renderer& r, AppState& state, const InputState& input,
     // ---- Window controls (far right) ----
     auto wbr = winBtnRects(windowW);
     drawWinButton(r, wbr.minimize, mdl2::ChromeMin,
-                  theme::COL_SURFACE_CONTAINER_HIGHEST, input);
+                  theme::COL_GLASS_CARD_HOVER_BG, input);
     drawWinButton(r, wbr.maximize, maximized ? mdl2::ChromeRest : mdl2::ChromeMax,
-                  theme::COL_SURFACE_CONTAINER_HIGHEST, input);
+                  theme::COL_GLASS_CARD_HOVER_BG, input);
     drawWinButton(r, wbr.close, mdl2::ChromeClose,
-                  theme::COL_SURFACE_CONTAINER_HIGHEST, input, /*danger*/ true);
-
-    // Vertical divider between utility and window-control strips.
-    float divX = windowW - winStripW - kPadX * 0.5f;
-    r.fillRect({ divX, kPadY, 1, kSearchH }, theme::COL_OUTLINE_VARIANT);
+                  theme::COL_GLASS_CARD_HOVER_BG, input, /*danger*/ true);
 }
 
 TopBarButton TopBar::hitTest(int x, int y, AppState& state, float windowW) {
     (void)state;
     if (y < 0 || y >= theme::TOPBAR_H) return TopBarButton::None;
-    if (y >= kWinBtnH) return TopBarButton::None;  // utility buttons are placeholders
-    auto wbr = winBtnRects(windowW);
-    if (x >= wbr.close.x)    return TopBarButton::Close;
-    if (x >= wbr.maximize.x) return TopBarButton::Maximize;
-    if (x >= wbr.minimize.x) return TopBarButton::Minimize;
+
+    // Check window controls first (their height is kWinBtnH = 32)
+    if (y < kWinBtnH) {
+        auto wbr = winBtnRects(windowW);
+        if (x >= wbr.close.x && x <= wbr.close.x + wbr.close.w)    return TopBarButton::Close;
+        if (x >= wbr.maximize.x && x <= wbr.maximize.x + wbr.maximize.w) return TopBarButton::Maximize;
+        if (x >= wbr.minimize.x && x <= wbr.minimize.x + wbr.minimize.w) return TopBarButton::Minimize;
+    }
+
+    // Check utility buttons (Filter, Settings, History)
+    float winStripW = 3.0f * kWinBtnW + 2.0f * kWinBtnGap;
+    float startX = windowW - kPadX - winStripW;
+    float utilY = kPadY;
+
+    // History
+    float hX = startX - kUtilBtnSize - kUtilGap;
+    if (x >= hX && x <= hX + kUtilBtnSize && y >= utilY && y <= utilY + kUtilBtnSize) {
+        return TopBarButton::History;
+    }
+
+    // Settings
+    float sX = hX - kUtilBtnSize - kUtilGap;
+    if (x >= sX && x <= sX + kUtilBtnSize && y >= utilY && y <= utilY + kUtilBtnSize) {
+        return TopBarButton::Settings;
+    }
+
+    // Filter
+    float fX = sX - kUtilBtnSize - kUtilGap;
+    if (x >= fX && x <= fX + kUtilBtnSize && y >= utilY && y <= utilY + kUtilBtnSize) {
+        return TopBarButton::Filter;
+    }
+
     return TopBarButton::None;
 }
 

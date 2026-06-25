@@ -1,6 +1,7 @@
 #pragma once
 
 #include <windows.h>
+#include <wincodec.h>
 #include <d2d1.h>
 #include <d2d1_1.h>
 #include <dwrite.h>
@@ -8,6 +9,10 @@
 #include <string>
 #include <unordered_map>
 #include <functional>
+
+namespace pm {
+enum class PackageManager;
+}
 
 namespace pm::gui::win32 {
 
@@ -60,8 +65,14 @@ public:
     void drawText(const std::string& text, const RectF& rect, uint32_t color,
                   float fontSize, FontStyle style = Regular,
                   bool centerX = false, bool centerY = false);
+    float measureTextWidth(const std::wstring& text, float fontSize, FontStyle style = Regular);
+    float measureTextWidth(const std::string& text, float fontSize, FontStyle style = Regular);
 
     HWND hwnd() const { return hwnd_; }
+
+    void drawIcon(const std::string& packageId, const std::string& packageName, pm::PackageManager manager, const RectF& rect);
+    ComPtr<ID2D1Bitmap> getIconBitmap(const std::string& packageId, const std::string& packageName, pm::PackageManager manager);
+    ComPtr<ID2D1Bitmap> createBitmapFromHICON(HICON hIcon);
 
     // Direct D2D conversion helpers (inline for cheap use).
     static D2D1_POINT_2F toPoint(Vec2 v) { return D2D1::Point2F(v.x, v.y); }
@@ -87,6 +98,9 @@ private:
     std::unordered_map<uint64_t, ComPtr<IDWriteTextFormat>>           formats_;
     std::unordered_map<uint64_t, ComPtr<ID2D1LinearGradientBrush>>   linearBrushes_;
     std::unordered_map<uint64_t, ComPtr<ID2D1RadialGradientBrush>>   radialBrushes_;
+    std::unordered_map<std::string, ComPtr<ID2D1Bitmap>>              iconBitmaps_;
+
+    ComPtr<IWICImagingFactory> wicFactory_;
 
     HWND    hwnd_     = nullptr;
     float   dpiScale_ = 1.0f;

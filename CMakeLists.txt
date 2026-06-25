@@ -10,7 +10,7 @@ if(MSVC)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 
-add_executable(PackageManager WIN32
+add_executable(MyWinApps WIN32
     src/main.cpp
     src/core/Logger.cpp
     src/core/ProcessRunner.cpp
@@ -22,22 +22,24 @@ add_executable(PackageManager WIN32
     src/gui/i18n.cpp
     src/gui/BackendBridge.cpp
     src/gui/win32/Application.cpp
+    src/gui/win32/IconManager.cpp
     src/gui/win32/Renderer.cpp
     src/gui/win32/Sidebar.cpp
     src/gui/win32/TopBar.cpp
     src/gui/win32/Footer.cpp
     src/gui/win32/Screens.cpp
     src/gui/win32/TaskDrawer.cpp
+    src/gui/win32/resources.rc
 )
-target_include_directories(PackageManager PRIVATE src)
+target_include_directories(MyWinApps PRIVATE src)
 if(WIN32)
-    target_link_libraries(PackageManager PRIVATE
+    target_link_libraries(MyWinApps PRIVATE
         kernel32 user32 advapi32 shell32 ole32 oleaut32
         d2d1 d3d11 d3dcompiler dxgi dxguid dwmapi dwrite gdi32
     )
-    set_target_properties(PackageManager PROPERTIES
+    set_target_properties(MyWinApps PROPERTIES
         WIN32_EXECUTABLE ON
     )
 endif()
 
-install(TARGETS PackageManager RUNTIME DESTINATION bin)
+install(TARGETS MyWinApps RUNTIME DESTINATION bin)

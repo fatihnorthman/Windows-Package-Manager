@@ -57,6 +57,14 @@ struct AppState {
     bool                             wingetAvailable = false;
     bool                             scoopAvailable  = false;
     bool                             chocoAvailable  = false;
+    std::atomic<bool>                installingWinget{false};
+    std::atomic<bool>                installingScoop{false};
+    std::atomic<bool>                installingChoco{false};
+
+    int                              concurrencyLimit = 2;
+    bool                             msStoreSearchEnabled = false;
+    std::string                      wingetPath, scoopPath, chocoPath;
+    std::string                      wingetVer, scoopVer, chocoVer;
 
     // Bottom task-queue drawer UI state (collapsed vs expanded).
     bool                             tasksDrawerOpen = false;
@@ -78,6 +86,10 @@ struct AppState {
         // a click landed in the field.
         float         boxX = 0, boxY = 0, boxW = 0, boxH = 0;
         bool          boxValid = false;
+
+        // Geometry of topbar search box
+        float         tbX = 0, tbY = 0, tbW = 0, tbH = 0;
+        bool          tbValid = false;
     };
     TextInput                        searchInput;
 };
@@ -113,6 +125,10 @@ public:
     int  activeTasks()  const;
     int  doneTasks()    const;
 
+    void setConcurrencyLimit(int limit);
+    void installTool(int toolIndex);
+    void clearCache();
+
     // Read shared state (caller must hold AppState.mtx if mutating).
     AppState& state() { return state_; }
     const AppState& state() const { return state_; }
@@ -130,6 +146,7 @@ private:
     AppState                                state_;
     std::vector<std::shared_ptr<IPackageAdapter>> adapters_;
     std::unique_ptr<TaskQueue>              queue_;
+    std::shared_ptr<bool>                   alive_;
 };
 
 } // namespace pm::gui

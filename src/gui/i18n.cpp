@@ -9,7 +9,7 @@ Lang g_lang = Lang::En;
 const std::unordered_map<std::string, std::string>* g_dict = nullptr;
 
 const std::unordered_map<std::string, std::string> en = {
-    {"app_title",          "Package Manager"},
+    {"app_title",          "MyWinApps"},
     {"app_version",        "v1.2.0"},
 
     {"nav_discover",       "Discover"},
@@ -62,6 +62,17 @@ const std::unordered_map<std::string, std::string> en = {
     {"settings_lang_label","Language"},
     {"settings_lang_en",   "English"},
     {"settings_lang_tr",   "Turkce"},
+    {"settings_concurrency_label", "Task Concurrency Limit"},
+    {"settings_concurrency_desc",  "Sets the maximum number of packages to download and install in parallel."},
+    {"settings_store_label",       "Microsoft Store Online Search"},
+    {"settings_store_desc",        "Enable querying the online MS Store catalog. Disabling this makes Discover searches instant (<0.5s)."},
+    {"settings_cache_label",       "Clean Download & Temp Cache"},
+    {"settings_cache_desc",        "Delete temporary winget export files and local package installer cache to free up disk space."},
+    {"settings_cache_btn",         "Clear Cache"},
+    {"settings_tools_label",       "System Tool Integration Status"},
+    {"settings_tools_path",        "Path:"},
+    {"settings_tools_ver",         "Version:"},
+    {"settings_tools_status",      "Status:"},
 
     {"common_loading",     "Loading..."},
     {"common_refresh",     "Refresh"},
@@ -84,7 +95,7 @@ const std::unordered_map<std::string, std::string> en = {
 };
 
 const std::unordered_map<std::string, std::string> tr = {
-    {"app_title",          "Paket Yoneticisi"},
+    {"app_title",          "MyWinApps"},
     {"app_version",        "v1.2.0"},
 
     {"nav_discover",       "Kesfet"},
@@ -137,6 +148,17 @@ const std::unordered_map<std::string, std::string> tr = {
     {"settings_lang_label","Dil"},
     {"settings_lang_en",   "Ingilizce"},
     {"settings_lang_tr",   "Turkce"},
+    {"settings_concurrency_label", "Eşzamanlı Görev Sınırı"},
+    {"settings_concurrency_desc",  "Paralel olarak indirilip kurulacak maksimum paket sayısını belirler."},
+    {"settings_store_label",       "Microsoft Store Çevrimiçi Arama"},
+    {"settings_store_desc",        "Çevrimiçi MS Store kataloğunun sorgulanmasını etkinleştirir. Devre dışı bırakılması aramaları anlık (<0.5sn) yapar."},
+    {"settings_cache_label",       "İndirme ve Geçici Belleği Temizle"},
+    {"settings_cache_desc",        "Disk alanı açmak için geçici winget dışa aktarma dosyalarını ve yerel yükleyici önbelleğini siler."},
+    {"settings_cache_btn",         "Önbelleği Temizle"},
+    {"settings_tools_label",       "Sistem Araçları Entegrasyon Durumu"},
+    {"settings_tools_path",        "Yol:"},
+    {"settings_tools_ver",         "Sürüm:"},
+    {"settings_tools_status",      "Durum:"},
 
     {"common_loading",     "Yukleniyor..."},
     {"common_refresh",     "Yenile"},

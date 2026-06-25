@@ -19,6 +19,10 @@ public:
                        TaskAction action,
                        std::function<void(int percent)> progressCb,
                        ActionCallback done) override;
+    void setMsStoreSearchEnabled(bool enabled) { msStoreSearchEnabled_ = enabled; }
+
+private:
+    bool msStoreSearchEnabled_ = false;
 };
 
 } // namespace pm

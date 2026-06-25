@@ -66,83 +66,161 @@ std::vector<std::string> extractTopLevelObjects(const std::string& json) {
     return result;
 }
 
-// ---------------- Table parser for `winget list` / `upgrade` ----------------
+// ---------------- Robust table parser for winget output ----------------
 
-// Parse `winget list` (default table output) — winget v1.28 produces 4 cols:
-//   Name   Version   Available   Id
-std::vector<PackageInfo> parseListTable(const std::string& table) {
+std::vector<PackageInfo> parseWingetTable(const std::string& table) {
     std::vector<PackageInfo> pkgs;
     std::istringstream iss(table);
     std::string line;
-    bool pastHeader = false;
+    
+    struct ColBounds {
+        size_t start = 0;
+        size_t length = std::string::npos;
+    };
+    std::vector<ColBounds> cols;
+    
+    auto trim = [](const std::string& s) -> std::string {
+        auto start = s.find_first_not_of(" \t\r\n");
+        if (start == std::string::npos) return {};
+        auto end = s.find_last_not_of(" \t\r\n");
+        return s.substr(start, end - start + 1);
+    };
+
+    std::vector<std::string> lines;
     while (std::getline(iss, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.empty()) continue;
-        if (adapters::isSeparatorLine(line)) { pastHeader = true; continue; }
-        if (!pastHeader) continue;
-        auto cols = adapters::splitTableRow(line);
-        if (cols.size() < 2) continue;
+        lines.push_back(line);
+    }
+
+    // Step 1: Find separator line and header line
+    size_t sepIdx = std::string::npos;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const auto& l = lines[i];
+        if (l.empty()) continue;
+        bool isSep = true;
+        size_t hyphenCount = 0;
+        for (char c : l) {
+            if (c == '-') {
+                hyphenCount++;
+            } else if (c != ' ' && c != '\t') {
+                isSep = false;
+                break;
+            }
+        }
+        if (isSep && hyphenCount > 10) {
+            sepIdx = i;
+            break;
+        }
+    }
+
+    if (sepIdx == std::string::npos || sepIdx == 0) {
+        // Fallback to basic regex splitting if no separator line found
+        for (const auto& l : lines) {
+            if (l.empty()) continue;
+            if (l.find("Id") != std::string::npos && l.find("Version") != std::string::npos) continue;
+            if (l[0] == '-' && l.find_first_not_of("- \t") == std::string::npos) continue;
+            auto rowCols = adapters::splitTableRow(l);
+            if (rowCols.size() < 2) continue;
+            PackageInfo p;
+            p.manager = PackageManager::Winget;
+            p.name = rowCols[0];
+            p.id = rowCols[1];
+            if (rowCols.size() >= 3) p.installedVersion = rowCols[2];
+            if (rowCols.size() == 4) {
+                p.availableVersion = "";
+            } else if (rowCols.size() >= 5) {
+                p.availableVersion = rowCols[3];
+            }
+            if (p.availableVersion.empty() || p.availableVersion == p.installedVersion) {
+                p.state = InstallState::UpToDate;
+            } else {
+                p.state = InstallState::Unknown;
+            }
+            pkgs.push_back(std::move(p));
+        }
+        return pkgs;
+    }
+
+    // Step 2: Parse column bounds from separator line
+    const std::string& sepLine = lines[sepIdx];
+    size_t pos = 0;
+    while (pos < sepLine.size()) {
+        size_t nextHyphen = sepLine.find('-', pos);
+        if (nextHyphen == std::string::npos) break;
+        size_t nextSpace = sepLine.find(' ', nextHyphen);
+        ColBounds b;
+        b.start = nextHyphen;
+        if (nextSpace == std::string::npos) {
+            b.length = std::string::npos;
+            cols.push_back(b);
+            break;
+        } else {
+            b.length = nextSpace - nextHyphen;
+            cols.push_back(b);
+            pos = nextSpace + 1;
+        }
+    }
+
+    // Step 3: Map column headers
+    const std::string& headerLine = lines[sepIdx - 1];
+    int nameColIdx = 0;
+    int idColIdx = 1;
+    int verColIdx = 2;
+    int availColIdx = -1;
+
+    for (size_t i = 0; i < cols.size(); ++i) {
+        std::string hText;
+        if (cols[i].start < headerLine.size()) {
+            hText = headerLine.substr(cols[i].start, cols[i].length);
+        }
+        hText = trim(hText);
+        std::transform(hText.begin(), hText.end(), hText.begin(), [](unsigned char c){ return (char)std::tolower(c); });
+        
+        if (hText.find("id") != std::string::npos || hText.find("kimlik") != std::string::npos) {
+            idColIdx = static_cast<int>(i);
+        } else if (hText.find("available") != std::string::npos || hText.find("kullan") != std::string::npos || hText.find("mevcut") != std::string::npos) {
+            availColIdx = static_cast<int>(i);
+        } else if (hText.find("version") != std::string::npos || hText.find("sürüm") != std::string::npos || hText.find("surum") != std::string::npos) {
+            verColIdx = static_cast<int>(i);
+        } else if (hText.find("name") != std::string::npos || hText.find("ad") != std::string::npos) {
+            nameColIdx = static_cast<int>(i);
+        }
+    }
+
+    // Step 4: Parse data lines
+    for (size_t i = sepIdx + 1; i < lines.size(); ++i) {
+        const auto& l = lines[i];
+        if (l.empty()) continue;
+        if (l.find("upgrades available") != std::string::npos) continue;
+        if (l.find("upgrade available") != std::string::npos) continue;
+
+        auto getColValue = [&](int colIdx) -> std::string {
+            if (colIdx < 0 || colIdx >= static_cast<int>(cols.size())) return {};
+            const auto& b = cols[colIdx];
+            if (b.start >= l.size()) return {};
+            std::string val = l.substr(b.start, b.length);
+            auto p = val.find('<');
+            if (p != std::string::npos) val = val.substr(0, p);
+            return trim(val);
+        };
+
         PackageInfo p;
         p.manager = PackageManager::Winget;
-        if (cols.size() >= 5) {
-            // Layout: Name, Id, Version, Available, Source
-            p.name    = cols[0];
-            p.id      = cols[1];
-            p.installedVersion = cols[2];
-            p.availableVersion = cols[3];
-        } else if (cols.size() == 4) {
-            p.name    = cols[0];
-            p.id      = cols[1];
-            p.installedVersion = cols[2];
-            p.availableVersion = cols[3];
-        } else if (cols.size() == 3) {
-            p.name    = cols[0];
-            p.id      = cols[1];
-            p.installedVersion = cols[2];
-        } else {
-            p.id   = cols[0];
-            p.name = cols[1];
+        p.name = getColValue(nameColIdx);
+        p.id = getColValue(idColIdx);
+        p.installedVersion = getColValue(verColIdx);
+        if (availColIdx >= 0) {
+            p.availableVersion = getColValue(availColIdx);
         }
+        
         if (p.id.empty()) continue;
+
         if (p.availableVersion.empty() || p.availableVersion == p.installedVersion) {
             p.state = InstallState::UpToDate;
         } else {
-            p.state = InstallState::Unknown; // means "update available", not actively updating
+            p.state = InstallState::Unknown;
         }
-        pkgs.push_back(std::move(p));
-    }
-    return pkgs;
-}
 
-std::vector<PackageInfo> parseUpgradeTable(const std::string& table) {
-    return parseListTable(table); // same shape
-}
-
-std::vector<PackageInfo> parseSearchTable(const std::string& table, const std::string& query) {
-    (void)query;
-    std::vector<PackageInfo> pkgs;
-    std::istringstream iss(table);
-    std::string line;
-    bool pastHeader = false;
-    while (std::getline(iss, line)) {
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.empty()) continue;
-        if (adapters::isSeparatorLine(line)) { pastHeader = true; continue; }
-        if (!pastHeader) continue;
-        auto cols = adapters::splitTableRow(line);
-        if (cols.size() < 2) continue;
-        PackageInfo p;
-        p.manager = PackageManager::Winget;
-        if (cols.size() >= 3) {
-            p.name = cols[0];
-            p.id   = cols[1];
-            p.installedVersion = cols[2];
-        } else {
-            p.id   = cols[0];
-            p.name = cols[1];
-        }
-        if (p.id.empty()) continue;
-        p.state = InstallState::Unknown;
         pkgs.push_back(std::move(p));
     }
     return pkgs;
@@ -224,16 +302,18 @@ void WingetAdapter::listUpgradable(PackageListCallback cb) {
     ProcessOptions opt;
     opt.executable = "winget";
     opt.arguments  = {"upgrade", "--accept-source-agreements"};
-    adapters::runAndParseAsync(opt, parseUpgradeTable, std::move(cb));
+    adapters::runAndParseAsync(opt, parseWingetTable, std::move(cb));
 }
 
 void WingetAdapter::search(const std::string& query, PackageListCallback cb) {
     ProcessOptions opt;
     opt.executable = "winget";
-    opt.arguments  = {"search", query, "--accept-source-agreements"};
-    adapters::runAndParseAsync(opt,
-        [query](const std::string& s) { return parseSearchTable(s, query); },
-        std::move(cb));
+    if (msStoreSearchEnabled_) {
+        opt.arguments  = {"search", query, "--accept-source-agreements"};
+    } else {
+        opt.arguments  = {"search", query, "-s", "winget", "--accept-source-agreements"};
+    }
+    adapters::runAndParseAsync(opt, parseWingetTable, std::move(cb));
 }
 
 void WingetAdapter::performAction(const PackageInfo& pkg,

@@ -84,10 +84,24 @@ void rstripCarriageReturn(std::string& line) {
 
 } // anonymous
 
+namespace {
+
+std::mutex g_runnersMtx;
+std::vector<ProcessRunner*> g_activeRunners;
+
+} // anonymous
+
 ProcessRunner::ProcessRunner() = default;
 
 ProcessRunner::~ProcessRunner() {
     cancel();
+    {
+        std::lock_guard<std::mutex> lk(g_runnersMtx);
+        auto it = std::find(g_activeRunners.begin(), g_activeRunners.end(), this);
+        if (it != g_activeRunners.end()) {
+            g_activeRunners.erase(it);
+        }
+    }
     if (worker_.joinable()) {
         if (worker_.get_id() == std::this_thread::get_id()) {
             worker_.detach();
@@ -105,6 +119,12 @@ bool ProcessRunner::start(const ProcessOptions& opts) {
     opts_   = opts;
     cancel_ = false;
     running_ = true;
+
+    {
+        std::lock_guard<std::mutex> lk(g_runnersMtx);
+        g_activeRunners.push_back(this);
+    }
+
     worker_  = std::thread([this] { run(); });
     return true;
 }
@@ -289,6 +309,12 @@ void ProcessRunner::run() {
 
         running_ = false;
 
+        {
+            std::lock_guard<std::mutex> lk(g_runnersMtx);
+            auto it = std::find(g_activeRunners.begin(), g_activeRunners.end(), this);
+            if (it != g_activeRunners.end()) g_activeRunners.erase(it);
+        }
+
         ProcessResult res;
         res.exitCode  = static_cast<int>(exitCode);
         res.stdoutText = std::move(outBuf);
@@ -302,6 +328,11 @@ void ProcessRunner::run() {
     } catch (const std::exception& e) {
         Logger::instance().error("ProcessRunner exception in run(): ", e.what());
         running_ = false;
+        {
+            std::lock_guard<std::mutex> lk(g_runnersMtx);
+            auto it = std::find(g_activeRunners.begin(), g_activeRunners.end(), this);
+            if (it != g_activeRunners.end()) g_activeRunners.erase(it);
+        }
         CompleteCb cb = std::move(completeCb_);
         progressCb_ = nullptr;
         lineCb_     = nullptr;
@@ -314,6 +345,11 @@ void ProcessRunner::run() {
     } catch (...) {
         Logger::instance().error("ProcessRunner unknown exception in run()");
         running_ = false;
+        {
+            std::lock_guard<std::mutex> lk(g_runnersMtx);
+            auto it = std::find(g_activeRunners.begin(), g_activeRunners.end(), this);
+            if (it != g_activeRunners.end()) g_activeRunners.erase(it);
+        }
         CompleteCb cb = std::move(completeCb_);
         progressCb_ = nullptr;
         lineCb_     = nullptr;
@@ -335,6 +371,13 @@ void ProcessRunner::cancel() {
     std::lock_guard<std::mutex> lk(handleMtx_);
     HANDLE h = static_cast<HANDLE>(processHandle_);
     if (h) TerminateProcess(h, 1);
+}
+
+void ProcessRunner::cancelAll() {
+    std::lock_guard<std::mutex> lk(g_runnersMtx);
+    for (auto* r : g_activeRunners) {
+        if (r) r->cancel();
+    }
 }
 
 } // namespace pm

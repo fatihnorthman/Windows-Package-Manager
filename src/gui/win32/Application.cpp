@@ -167,6 +167,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
 
+        case WM_NCACTIVATE:
+            // Prevent the OS from drawing the default title bar or border
+            // when the window gains or loses focus.
+            return TRUE;
+
         case WM_NCPAINT:
             return 0;  // we paint the whole frame; skip non-client paint
 
@@ -229,7 +234,7 @@ bool Application::initWindow(HINSTANCE hInstance, int w, int h) {
     AdjustWindowRect(&rc, style, FALSE);
 
     hwnd_ = CreateWindowExW(
-        0, wc.lpszClassName, L"Windows Package Manager",
+        0, wc.lpszClassName, L"MyWinApps",
         style,
         CW_USEDEFAULT, CW_USEDEFAULT,
         rc.right - rc.left, rc.bottom - rc.top,
@@ -253,15 +258,22 @@ void Application::handleMouseUp(int x, int y) {
     const float W = static_cast<float>(rc.right);
     const float H = static_cast<float>(rc.bottom);
 
-    // Focus management: clicking inside the currently-bound text-input
-    // box gives it focus; clicking outside releases it.
+    // Focus management: clicking inside either the currently-bound screen text-input
+    // box or the top bar search box gives it focus; clicking outside releases it.
+    bool insideSearch = false;
     if (state.searchInput.boxValid) {
-        bool inside = x >= state.searchInput.boxX
-                   && x <= state.searchInput.boxX + state.searchInput.boxW
-                   && y >= state.searchInput.boxY
-                   && y <= state.searchInput.boxY + state.searchInput.boxH;
-        state.searchInput.focused = inside;
+        insideSearch = x >= state.searchInput.boxX
+                    && x <= state.searchInput.boxX + state.searchInput.boxW
+                    && y >= state.searchInput.boxY
+                    && y <= state.searchInput.boxY + state.searchInput.boxH;
     }
+    if (!insideSearch && state.searchInput.tbValid) {
+        insideSearch = x >= state.searchInput.tbX
+                    && x <= state.searchInput.tbX + state.searchInput.tbW
+                    && y >= state.searchInput.tbY
+                    && y <= state.searchInput.tbY + state.searchInput.tbH;
+    }
+    state.searchInput.focused = insideSearch;
 
     if (auto btn = TopBar::hitTest(x, y, state, W); btn != TopBarButton::None) {
         switch (btn) {
@@ -274,6 +286,12 @@ void Application::handleMouseUp(int x, int y) {
                 return;
             case TopBarButton::Close:
                 PostMessage(hwnd_, WM_CLOSE, 0, 0);
+                return;
+            case TopBarButton::Settings:
+                state.currentScreen = ScreenId::Settings;
+                return;
+            case TopBarButton::History:
+                state.currentScreen = ScreenId::Tasks;
                 return;
             default: break;
         }
@@ -300,18 +318,19 @@ void Application::renderFrame() {
     const float W = static_cast<float>(rc.right);
     const float H = static_cast<float>(rc.bottom);
 
-    // Ambient background — a very gentle warm-to-cool vertical fade
-    // instead of flat black. Sets the mood for the whole window before
-    // any UI surfaces paint over it.
+    // Ambient background mesh gradient
     renderer_.fillRectLinearV({ 0, 0, W, H },
-                              theme::COL_BG_GRAD_TOP, theme::COL_BG_GRAD_BOT);
+                              theme::COL_MESH_BG_TOP, theme::COL_MESH_BG_BOT);
 
-    // A soft primary-tinted halo behind the top-left corner, fading to
-    // transparent. Gives the impression of light spilling from the
-    // title bar across the rest of the window.
-    renderer_.fillRectRadial({ 0, 0, W, H * 0.6f },
-                             0.15f, 0.25f, 0.85f,
-                             theme::COL_HALO_CENTER, theme::COL_HALO_EDGE);
+    // Layer 1: Glowing violet halo anchored near top-left
+    renderer_.fillRectRadial({ -100.0f, -100.0f, W * 0.9f, H * 0.9f },
+                             0.1f, 0.1f, 0.9f,
+                             theme::COL_GLOW_VIOLET, 0x00000000);
+
+    // Layer 2: Glowing cyan halo anchored near bottom-right
+    renderer_.fillRectRadial({ W * 0.1f, H * 0.1f, W * 0.9f, H * 0.9f },
+                             0.9f, 0.9f, 0.9f,
+                             theme::COL_GLOW_CYAN, 0x00000000);
 
     Sidebar::draw(renderer_, state, input_);
     TopBar::draw(renderer_, state, input_, W, maximized_);

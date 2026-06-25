@@ -70,6 +70,17 @@ namespace keys {
     constexpr std::string_view settings_lang_label= "settings_lang_label";
     constexpr std::string_view settings_lang_en   = "settings_lang_en";
     constexpr std::string_view settings_lang_tr   = "settings_lang_tr";
+    constexpr std::string_view settings_concurrency_label = "settings_concurrency_label";
+    constexpr std::string_view settings_concurrency_desc  = "settings_concurrency_desc";
+    constexpr std::string_view settings_store_label       = "settings_store_label";
+    constexpr std::string_view settings_store_desc        = "settings_store_desc";
+    constexpr std::string_view settings_cache_label        = "settings_cache_label";
+    constexpr std::string_view settings_cache_desc         = "settings_cache_desc";
+    constexpr std::string_view settings_cache_btn          = "settings_cache_btn";
+    constexpr std::string_view settings_tools_label        = "settings_tools_label";
+    constexpr std::string_view settings_tools_path         = "settings_tools_path";
+    constexpr std::string_view settings_tools_ver          = "settings_tools_ver";
+    constexpr std::string_view settings_tools_status       = "settings_tools_status";
 
     constexpr std::string_view common_loading     = "common_loading";
     constexpr std::string_view common_refresh     = "common_refresh";

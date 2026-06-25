@@ -168,6 +168,7 @@ void TerminateHandler() {
 }
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     SetUnhandledExceptionFilter(CrashHandler);
     std::set_terminate(TerminateHandler);
     
@@ -175,7 +176,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     pm::gui::win32::Application app;
     if (!app.init(hInstance, 1280, 800)) {
         std::fprintf(stderr, "Failed to initialize application.\n");
+        CoUninitialize();
         return 1;
     }
-    return app.run();
+    int ret = app.run();
+    CoUninitialize();
+    return ret;
 }

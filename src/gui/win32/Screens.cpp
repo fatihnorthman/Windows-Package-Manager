@@ -236,11 +236,11 @@ void renderDiscover(Renderer& r, AppState& state, BackendBridge& bridge,
     state.searchInput.boxValid = (state.currentScreen == ScreenId::Discover);
 
     if (state.searchInput.focused) {
-        r.fillRectLinearV(sBox, 0xFF353535, theme::COL_SURFACE_CONTAINER_HIGH, 8.0f);
+        r.fillRoundedRect(sBox, theme::COL_GLASS_CARD_HOVER_BG, 8.0f);
         r.strokeRect(sBox, theme::COL_PRIMARY, 1.5f, 8.0f);
     } else {
-        r.fillRectLinearV(sBox, 0xFF2F2F2F, theme::COL_SURFACE_CONTAINER_HIGH, 8.0f);
-        r.strokeRect(sBox, theme::COL_OUTLINE_VARIANT, 1.0f, 8.0f);
+        r.fillRoundedRect(sBox, theme::COL_GLASS_CARD_BG, 8.0f);
+        r.strokeRect(sBox, theme::COL_GLASS_CARD_BORDER, 1.0f, 8.0f);
     }
     r.drawText(std::wstring(mdl2::Search), { sBox.x + 14, sBox.y + 9, 18, 18 },
                theme::COL_ON_SURFACE_VARIANT, 14.0f, Renderer::Icon);
@@ -253,10 +253,7 @@ void renderDiscover(Renderer& r, AppState& state, BackendBridge& bridge,
                    { sBox.x + 40, sBox.y + 9, sBox.w - 56, 18 },
                    theme::COL_ON_SURFACE, 13.0f, Renderer::Regular);
         if (state.searchInput.focused) {
-            // Cheap text-width estimate: ~7px per char at 13pt. A real
-            // measurement would call IDWriteTextLayout, but this is
-            // close enough for the cursor to track the caret.
-            float cursorX = sBox.x + 40 + 7.0f * (float)state.searchInput.text.size();
+            float cursorX = sBox.x + 40 + r.measureTextWidth(state.searchInput.text, 13.0f, Renderer::Regular);
             r.fillRect({ cursorX, sBox.y + 8, 1.5f, 20 }, theme::COL_PRIMARY);
         }
     }
@@ -292,24 +289,44 @@ void renderDiscover(Renderer& r, AppState& state, BackendBridge& bridge,
             const auto& p = state.searchResults[offset + i];
             float ry = listY + i * kRowStride;
             RectF row{ x, ry, w - 12.0f, 42.0f };
-            r.fillRectLinearV(row,
-                              theme::COL_CARD_GRAD_TOP, theme::COL_CARD_GRAD_BOT,
-                              6.0f);
-            r.strokeRect(row, theme::COL_OUTLINE_VARIANT, 1.0f, 6.0f);
-            r.drawText(p.name, { row.x + 12, row.y + 9, 240, 18 },
+            
+            r.fillRoundedRect(row, theme::COL_GLASS_CARD_BG, theme::CARD_RADIUS);
+            bool rowHover = input.mouseInside
+                         && input.mouse.x >= row.x && input.mouse.x <= row.x + row.w
+                         && input.mouse.y >= row.y && input.mouse.y <= row.y + row.h;
+            if (rowHover) {
+                float cx = std::clamp(((float)input.mouse.x - row.x) / row.w, 0.0f, 1.0f);
+                float cy = std::clamp(((float)input.mouse.y - row.y) / row.h, 0.0f, 1.0f);
+                r.fillRectRadial(row, cx, cy, 0.6f, 0x1AFFFFFF, 0x00FFFFFF);
+                r.strokeRect(row, theme::COL_GLASS_CARD_HOVER_BORDER, 1.0f, theme::CARD_RADIUS);
+            } else {
+                r.strokeRect(row, theme::COL_GLASS_CARD_BORDER, 1.0f, theme::CARD_RADIUS);
+            }
+
+            RectF logoRect{ row.x + 12, row.y + 5, 32, 32 };
+            r.drawIcon(p.id, p.name, p.manager, logoRect);
+
+            // Check if package is already installed locally
+            bool isInstalled = false;
+            std::string installedVer;
+            for (const auto& inst : state.installed) {
+                if (inst.id == p.id && inst.manager == p.manager) {
+                    isInstalled = true;
+                    installedVer = inst.installedVersion;
+                    break;
+                }
+            }
+
+            r.drawText(p.name, { logoRect.x + logoRect.w + 12, row.y + 6, 240, 16 },
                        theme::COL_ON_SURFACE, 13.0f, Renderer::Regular);
-            r.drawText(p.id, { row.x + 12, row.y + 25, 240, 14 },
-                       theme::COL_ON_SURFACE_VARIANT, 11.0f, Renderer::Regular);
-            r.drawText(p.installedVersion.empty() ? std::string("--")
-                                                    : p.installedVersion,
-                       { row.x + 260, row.y + 9, 100, 18 },
+            r.drawText(p.id, { logoRect.x + logoRect.w + 12, row.y + 22, 240, 12 },
+                       theme::COL_ON_SURFACE_VARIANT, 10.5f, Renderer::Regular);
+            r.drawText(isInstalled ? installedVer : (p.installedVersion.empty() ? std::string("--") : p.installedVersion),
+                       { row.x + 300, row.y + 12, 100, 18 },
                        theme::COL_ON_SURFACE_VARIANT, 12.0f, Renderer::Mono);
 
             RectF ibtn{ row.x + row.w - 100, row.y + 7, 90, 28 };
 
-            // Look up the task state for this package so the button
-            // can show progress / queued / done locally without
-            // forcing the user to switch to the Tasks screen.
             bool       inflight    = false;
             int        liveProgress = 0;
             InstallState liveState  = InstallState::Unknown;
@@ -330,22 +347,31 @@ void renderDiscover(Renderer& r, AppState& state, BackendBridge& bridge,
             if (inflight
                 || liveState == InstallState::Installing
                 || liveState == InstallState::Updating) {
+                
+                // Check if this task is an uninstall task
+                bool isUninstallTask = false;
+                for (const auto& tt : taskSnap) {
+                    if (tt.package.id == p.id && tt.package.manager == p.manager
+                        && tt.action == TaskAction::Uninstall) {
+                        isUninstallTask = true;
+                        break;
+                    }
+                }
+
                 r.fillRoundedRect(ibtn, theme::COL_SURFACE_CONTAINER_HIGHEST, 4.0f);
+                uint32_t progressCol = isUninstallTask ? theme::COL_ERROR : theme::COL_PRIMARY_CONTAINER;
+                std::string progressLabel = isUninstallTask ? t(keys::installed_btn_uninstalling) : t(keys::discover_btn_installing);
+
                 if (liveProgress > 0) {
                     float frac = std::clamp(liveProgress, 0, 100) / 100.0f;
-                    r.fillRoundedRect({ ibtn.x, ibtn.y, ibtn.w * frac, ibtn.h },
-                                      theme::COL_PRIMARY_CONTAINER, 4.0f);
-                    char pct[16];
-                    std::snprintf(pct, sizeof(pct), "%s %d%%",
-                                  t(keys::discover_btn_installing).c_str(),
-                                  liveProgress);
+                    r.fillRoundedRect({ ibtn.x, ibtn.y, ibtn.w * frac, ibtn.h }, progressCol, 4.0f);
+                    char pct[32];
+                    std::snprintf(pct, sizeof(pct), "%s %d%%", progressLabel.c_str(), liveProgress);
                     r.drawText(pct, ibtn, theme::COL_ON_SURFACE,
                                10.0f, Renderer::Bold, true, true);
                 } else {
-                    // Indeterminate: half-width fill, "Installing..." label
-                    r.fillRoundedRect({ ibtn.x, ibtn.y, ibtn.w * 0.5f, ibtn.h },
-                                      theme::COL_PRIMARY_CONTAINER, 4.0f);
-                    r.drawText(t(keys::discover_btn_installing), ibtn,
+                    r.fillRoundedRect({ ibtn.x, ibtn.y, ibtn.w * 0.5f, ibtn.h }, progressCol, 4.0f);
+                    r.drawText(progressLabel, ibtn,
                                theme::COL_ON_PRIMARY_CONTAINER,
                                10.0f, Renderer::Bold, true, true);
                 }
@@ -361,9 +387,21 @@ void renderDiscover(Renderer& r, AppState& state, BackendBridge& bridge,
             } else {
                 bool hov = input.mouseInside
                          && RectContains(ibtn, input.mouse.x, input.mouse.y);
-                drawButton(r, ibtn, t(keys::discover_btn_install), false, input, hov);
-                pushRect(ibtn, 200,
-                         std::string("install:") + std::string(toString(p.manager)) + ":" + p.id);
+                if (isInstalled) {
+                    // Draw Uninstall button
+                    uint32_t bg = hov ? 0x33E81123 : 0;
+                    uint32_t bd = theme::COL_ERROR;
+                    if (bg) r.fillRoundedRect(ibtn, bg, 6.0f);
+                    r.strokeRect(ibtn, bd, 1.0f, 6.0f);
+                    r.drawText(t(keys::installed_btn_uninstall), ibtn,
+                               theme::COL_ERROR, 12.0f, Renderer::Bold, true, true);
+                    pushRect(ibtn, 400,
+                             std::string("uninstall:") + std::string(toString(p.manager)) + ":" + p.id);
+                } else {
+                    drawButton(r, ibtn, t(keys::discover_btn_install), false, input, hov);
+                    pushRect(ibtn, 200,
+                             std::string("install:") + std::string(toString(p.manager)) + ":" + p.id);
+                }
             }
         }
         drawScrollbar(r, x + w - 4.0f, listY, listH, offset, total, visible);
@@ -412,16 +450,18 @@ void renderInstalled(Renderer& r, AppState& state, BackendBridge& bridge,
             const auto& p = state.installed[offset + i];
             float ry = listY + i * kRowStride;
             RectF row{ x, ry, w - 12.0f, 44.0f };
-            r.fillRectLinearV(row,
-                              theme::COL_CARD_GRAD_TOP, theme::COL_CARD_GRAD_BOT,
-                              theme::CARD_RADIUS);
+            r.fillRoundedRect(row, theme::COL_GLASS_CARD_BG, theme::CARD_RADIUS);
             bool rowHover = input.mouseInside
                          && input.mouse.x >= row.x && input.mouse.x <= row.x + row.w
                          && input.mouse.y >= row.y && input.mouse.y <= row.y + row.h;
             if (rowHover) {
-                r.fillRectLinearV(row, 0x14FFFFFF, 0x06FFFFFF, theme::CARD_RADIUS);
+                float cx = std::clamp(((float)input.mouse.x - row.x) / row.w, 0.0f, 1.0f);
+                float cy = std::clamp(((float)input.mouse.y - row.y) / row.h, 0.0f, 1.0f);
+                r.fillRectRadial(row, cx, cy, 0.6f, 0x1AFFFFFF, 0x00FFFFFF);
+                r.strokeRect(row, theme::COL_GLASS_CARD_HOVER_BORDER, 1.0f, theme::CARD_RADIUS);
+            } else {
+                r.strokeRect(row, theme::COL_GLASS_CARD_BORDER, 1.0f, theme::CARD_RADIUS);
             }
-            r.strokeRect(row, theme::COL_OUTLINE_VARIANT, 1.0f, theme::CARD_RADIUS);
 
             // 3px left accent stripe in the source's brand color.
             uint32_t stripe = (p.manager == PackageManager::Winget)     ? theme::COL_PRIMARY
@@ -433,7 +473,7 @@ void renderInstalled(Renderer& r, AppState& state, BackendBridge& bridge,
 
             // Logo
             RectF logoRect{ row.x + 18, row.y + 4, 36, 36 };
-            drawLogoPlaceholder(r, logoRect, p.id, p.manager);
+            r.drawIcon(p.id, p.name, p.manager, logoRect);
 
             // Name + id
             r.drawText(p.name, { logoRect.x + logoRect.w + 12, row.y + 8, 280, 18 },
@@ -585,24 +625,18 @@ void renderUpdates(Renderer& r, AppState& state, BackendBridge& bridge,
         // color so rows scan as belonging together even before you
         // read the badge column.
         RectF rowBg{ x, yRow, w - 12.0f, kRowH };
-        r.fillRectLinearV(rowBg,
-                          theme::COL_CARD_GRAD_TOP, theme::COL_CARD_GRAD_BOT,
-                          theme::CARD_RADIUS);
-
-        // Hover highlight — a subtle vertical gradient overlay applied
-        // on top of the base card. Cheap visual feedback that the row
-        // is interactive without animating anything.
+        r.fillRoundedRect(rowBg, theme::COL_GLASS_CARD_BG, theme::CARD_RADIUS);
         bool rowHover = input.mouseInside
                      && input.mouse.x >= rowBg.x && input.mouse.x <= rowBg.x + rowBg.w
                      && input.mouse.y >= rowBg.y && input.mouse.y <= rowBg.y + rowBg.h;
         if (rowHover) {
-            r.fillRectLinearV(rowBg,
-                              0x14FFFFFF,  // white @ ~8% alpha
-                              0x06FFFFFF,  // white @ ~2% alpha
-                              theme::CARD_RADIUS);
+            float cx = std::clamp(((float)input.mouse.x - rowBg.x) / rowBg.w, 0.0f, 1.0f);
+            float cy = std::clamp(((float)input.mouse.y - rowBg.y) / rowBg.h, 0.0f, 1.0f);
+            r.fillRectRadial(rowBg, cx, cy, 0.6f, 0x1AFFFFFF, 0x00FFFFFF);
+            r.strokeRect(rowBg, theme::COL_GLASS_CARD_HOVER_BORDER, 1.0f, theme::CARD_RADIUS);
+        } else {
+            r.strokeRect(rowBg, theme::COL_GLASS_CARD_BORDER, 1.0f, theme::CARD_RADIUS);
         }
-
-        r.strokeRect(rowBg, theme::COL_OUTLINE_VARIANT, 1.0f, theme::CARD_RADIUS);
 
         // Left accent stripe (3px) in the source's brand color.
         uint32_t stripe = (p.manager == PackageManager::Winget)     ? theme::COL_PRIMARY
@@ -614,7 +648,7 @@ void renderUpdates(Renderer& r, AppState& state, BackendBridge& bridge,
 
         // Col 0: Logo + name + publisher
         RectF logoRect{ x + 22, yRow + (kRowH - kLogoSize) / 2.0f, kLogoSize, kLogoSize };
-        drawLogoPlaceholder(r, logoRect, p.id, p.manager);
+        r.drawIcon(p.id, p.name, p.manager, logoRect);
         std::string publisher = "Winget";
         if (auto dot = p.id.find('.'); dot != std::string::npos) publisher = p.id.substr(0, dot);
         r.drawText(p.name, { x + 22 + kLogoSize + 14, yRow + 12, colW[0] - kLogoSize - 28, 20 },
@@ -710,7 +744,8 @@ void renderTasks(Renderer& r, AppState& state, BackendBridge& bridge,
             const auto& task = snap[offset + i];
             float ry = listY + i * kRowStride;
             RectF row{ x, ry, w - 12.0f, 36.0f };
-            r.fillRoundedRect(row, theme::COL_SURFACE_CONTAINER, 6.0f);
+            r.fillRoundedRect(row, theme::COL_GLASS_CARD_BG, 8.0f);
+            r.strokeRect(row, theme::COL_GLASS_CARD_BORDER, 1.0f, 8.0f);
             char id[16]; std::snprintf(id, sizeof(id), "%llu", (unsigned long long)task.id);
             r.drawText(id, { row.x + 12, row.y + 9, 50, 18 },
                        theme::COL_ON_SURFACE, 13.0f, Renderer::Regular);
@@ -742,27 +777,41 @@ void renderTasks(Renderer& r, AppState& state, BackendBridge& bridge,
 // ---- Settings ----
 void renderSettings(Renderer& r, AppState& state, BackendBridge& bridge,
                     const InputState& input, float x, float y, float w, float h) {
-    (void)state;
-    (void)bridge;
     (void)h;
     drawHeroHeader(r, x, y, w, t(keys::settings_title), t(keys::settings_subtitle));
     float sy = y + 90;
 
-    // Language card
-    RectF card { x, sy, 480, 100 };
-    r.fillRoundedRect(card, 0xB2201F1F, theme::CARD_RADIUS);
-    r.strokeRect(card, 0x33404752, 1.0f, theme::CARD_RADIUS);
-    r.drawText(t(keys::settings_lang_label), { card.x + 20, card.y + 18, 200, 20 },
-               theme::COL_ON_SURFACE, 14.0f, Renderer::Regular);
+    float cardW = (w - 20) / 2.0f;
+    if (cardW > 480) cardW = 480; // clamp card width to keep it looking neat
+
+    // ----------------------------------------------------
+    // COLUMN 1
+    // ----------------------------------------------------
+    float col1X = x;
+    
+    // Card 1: Language card
+    RectF langCard { col1X, sy, cardW, 100 };
+    r.fillRoundedRect(langCard, 0xB2201F1F, theme::CARD_RADIUS);
+    r.strokeRect(langCard, 0x33404752, 1.0f, theme::CARD_RADIUS);
+    r.drawText(t(keys::settings_lang_label), { langCard.x + 20, langCard.y + 15, cardW - 40, 20 },
+               theme::COL_ON_SURFACE, 14.0f, Renderer::Bold);
 
     bool isEn = currentLang() == Lang::En;
     bool isTr = currentLang() == Lang::Tr;
-    RectF enBtn { card.x + 20, card.y + 50, 100, 36 };
-    RectF trBtn { card.x + 140, card.y + 50, 100, 36 };
-    if (isEn) r.fillRoundedRect(enBtn, theme::COL_PRIMARY_CONTAINER, 999.0f);
-    else      r.strokeRect(enBtn, theme::COL_OUTLINE_VARIANT, 1.0f, 999.0f);
-    if (isTr) r.fillRoundedRect(trBtn, theme::COL_PRIMARY_CONTAINER, 999.0f);
-    else      r.strokeRect(trBtn, theme::COL_OUTLINE_VARIANT, 1.0f, 999.0f);
+    RectF enBtn { langCard.x + 20, langCard.y + 48, 100, 32 };
+    RectF trBtn { langCard.x + 130, langCard.y + 48, 100, 32 };
+    
+    bool hovEn = input.mouseInside && RectContains(enBtn, input.mouse.x, input.mouse.y);
+    bool hovTr = input.mouseInside && RectContains(trBtn, input.mouse.x, input.mouse.y);
+    
+    if (isEn) r.fillRoundedRect(enBtn, theme::COL_PRIMARY_CONTAINER, 6.0f);
+    else if (hovEn) r.fillRoundedRect(enBtn, 0x1AFFFFFF, 6.0f);
+    r.strokeRect(enBtn, isEn ? theme::COL_PRIMARY : theme::COL_OUTLINE_VARIANT, 1.0f, 6.0f);
+    
+    if (isTr) r.fillRoundedRect(trBtn, theme::COL_PRIMARY_CONTAINER, 6.0f);
+    else if (hovTr) r.fillRoundedRect(trBtn, 0x1AFFFFFF, 6.0f);
+    r.strokeRect(trBtn, isTr ? theme::COL_PRIMARY : theme::COL_OUTLINE_VARIANT, 1.0f, 6.0f);
+    
     r.drawText(t(keys::settings_lang_en), enBtn,
                isEn ? theme::COL_ON_PRIMARY_CONTAINER : theme::COL_ON_SURFACE_VARIANT,
                12.0f, Renderer::Bold, true, true);
@@ -770,9 +819,164 @@ void renderSettings(Renderer& r, AppState& state, BackendBridge& bridge,
                isTr ? theme::COL_ON_PRIMARY_CONTAINER : theme::COL_ON_SURFACE_VARIANT,
                12.0f, Renderer::Bold, true, true);
 
-    (void)input;
     pushRect(enBtn, 300, "lang_en");
     pushRect(trBtn, 300, "lang_tr");
+
+    // Card 2: Concurrency Card
+    RectF concCard { col1X, sy + 112, cardW, 115 };
+    r.fillRoundedRect(concCard, 0xB2201F1F, theme::CARD_RADIUS);
+    r.strokeRect(concCard, 0x33404752, 1.0f, theme::CARD_RADIUS);
+    
+    r.drawText(t(keys::settings_concurrency_label), { concCard.x + 20, concCard.y + 15, cardW - 40, 20 },
+               theme::COL_ON_SURFACE, 14.0f, Renderer::Bold);
+    r.drawText(t(keys::settings_concurrency_desc), { concCard.x + 20, concCard.y + 35, cardW - 40, 30 },
+               theme::COL_ON_SURFACE_VARIANT, 10.5f, Renderer::Regular);
+               
+    int limits[4] = { 1, 2, 4, 8 };
+    const char* limitLabels[4] = { "1 (Serial)", "2 (Std)", "4 (High)", "8 (Max)" };
+    for (int idx = 0; idx < 4; ++idx) {
+        int val = limits[idx];
+        RectF btn{ concCard.x + 20 + idx * ( (cardW - 40) / 4.0f ), concCard.y + 70, (cardW - 50) / 4.0f, 30 };
+        bool isActive = (state.concurrencyLimit == val);
+        bool hov = input.mouseInside && RectContains(btn, input.mouse.x, input.mouse.y);
+        
+        if (isActive) r.fillRoundedRect(btn, theme::COL_PRIMARY_CONTAINER, 6.0f);
+        else if (hov) r.fillRoundedRect(btn, 0x1AFFFFFF, 6.0f);
+        r.strokeRect(btn, isActive ? theme::COL_PRIMARY : theme::COL_OUTLINE_VARIANT, 1.0f, 6.0f);
+        
+        r.drawText(limitLabels[idx], btn,
+                   isActive ? theme::COL_ON_PRIMARY_CONTAINER : theme::COL_ON_SURFACE_VARIANT,
+                   10.0f, Renderer::Bold, true, true);
+                   
+        pushRect(btn, 500, "concurrency:" + std::to_string(val));
+    }
+
+    // Card 3: MS Store Search Card
+    RectF storeCard { col1X, sy + 239, cardW, 115 };
+    r.fillRoundedRect(storeCard, 0xB2201F1F, theme::CARD_RADIUS);
+    r.strokeRect(storeCard, 0x33404752, 1.0f, theme::CARD_RADIUS);
+    
+    r.drawText(t(keys::settings_store_label), { storeCard.x + 20, storeCard.y + 15, cardW - 40, 20 },
+               theme::COL_ON_SURFACE, 14.0f, Renderer::Bold);
+    r.drawText(t(keys::settings_store_desc), { storeCard.x + 20, storeCard.y + 35, cardW - 40, 30 },
+               theme::COL_ON_SURFACE_VARIANT, 10.5f, Renderer::Regular);
+               
+    RectF stOnBtn { storeCard.x + 20, storeCard.y + 70, 100, 30 };
+    RectF stOffBtn { storeCard.x + 130, storeCard.y + 70, 100, 30 };
+    bool storeOn = state.msStoreSearchEnabled;
+    bool hovOn = input.mouseInside && RectContains(stOnBtn, input.mouse.x, input.mouse.y);
+    bool hovOff = input.mouseInside && RectContains(stOffBtn, input.mouse.x, input.mouse.y);
+    
+    if (storeOn) r.fillRoundedRect(stOnBtn, theme::COL_PRIMARY_CONTAINER, 6.0f);
+    else if (hovOn) r.fillRoundedRect(stOnBtn, 0x1AFFFFFF, 6.0f);
+    r.strokeRect(stOnBtn, storeOn ? theme::COL_PRIMARY : theme::COL_OUTLINE_VARIANT, 1.0f, 6.0f);
+    
+    if (!storeOn) r.fillRoundedRect(stOffBtn, theme::COL_PRIMARY_CONTAINER, 6.0f);
+    else if (hovOff) r.fillRoundedRect(stOffBtn, 0x1AFFFFFF, 6.0f);
+    r.strokeRect(stOffBtn, !storeOn ? theme::COL_PRIMARY : theme::COL_OUTLINE_VARIANT, 1.0f, 6.0f);
+    
+    r.drawText(currentLang() == Lang::En ? "Enabled" : "Etkin", stOnBtn,
+               storeOn ? theme::COL_ON_PRIMARY_CONTAINER : theme::COL_ON_SURFACE_VARIANT,
+               11.0f, Renderer::Bold, true, true);
+    r.drawText(currentLang() == Lang::En ? "Disabled" : "Devre Disi", stOffBtn,
+               !storeOn ? theme::COL_ON_PRIMARY_CONTAINER : theme::COL_ON_SURFACE_VARIANT,
+               11.0f, Renderer::Bold, true, true);
+               
+    pushRect(stOnBtn, 600, "store:on");
+    pushRect(stOffBtn, 600, "store:off");
+
+    // ----------------------------------------------------
+    // COLUMN 2
+    // ----------------------------------------------------
+    float col2X = x + cardW + 20;
+
+    // Card 4: System Cache Card
+    RectF cacheCard { col2X, sy, cardW, 100 };
+    r.fillRoundedRect(cacheCard, 0xB2201F1F, theme::CARD_RADIUS);
+    r.strokeRect(cacheCard, 0x33404752, 1.0f, theme::CARD_RADIUS);
+    
+    r.drawText(t(keys::settings_cache_label), { cacheCard.x + 20, cacheCard.y + 15, cardW - 40, 20 },
+               theme::COL_ON_SURFACE, 14.0f, Renderer::Bold);
+    r.drawText(t(keys::settings_cache_desc), { cacheCard.x + 20, cacheCard.y + 35, cardW - 40, 30 },
+               theme::COL_ON_SURFACE_VARIANT, 10.5f, Renderer::Regular);
+               
+    RectF clrBtn { cacheCard.x + 20, cacheCard.y + 55, 120, 30 };
+    bool hovClr = input.mouseInside && RectContains(clrBtn, input.mouse.x, input.mouse.y);
+    
+    if (hovClr) r.fillRoundedRect(clrBtn, 0xFFE81123, 6.0f);
+    r.strokeRect(clrBtn, hovClr ? 0xFFE81123 : theme::COL_ERROR, 1.0f, 6.0f);
+    r.drawText(t(keys::settings_cache_btn), clrBtn,
+               hovClr ? 0xFFFFFFFF : theme::COL_ERROR,
+               11.0f, Renderer::Bold, true, true);
+               
+    pushRect(clrBtn, 700, "clear_cache");
+
+    // Card 5: Tools Status Card
+    RectF toolsCard { col2X, sy + 112, cardW, 242 };
+    r.fillRoundedRect(toolsCard, 0xB2201F1F, theme::CARD_RADIUS);
+    r.strokeRect(toolsCard, 0x33404752, 1.0f, theme::CARD_RADIUS);
+    
+    r.drawText(t(keys::settings_tools_label), { toolsCard.x + 20, toolsCard.y + 15, cardW - 40, 20 },
+               theme::COL_ON_SURFACE, 14.0f, Renderer::Bold);
+               
+    struct ToolData {
+        const char* name;
+        bool available;
+        const std::string& path;
+        const std::string& version;
+    };
+    ToolData tools[3] = {
+        { "Winget", state.wingetAvailable, state.wingetPath, state.wingetVer },
+        { "Scoop", state.scoopAvailable, state.scoopPath, state.scoopVer },
+        { "Chocolatey", state.chocoAvailable, state.chocoPath, state.chocoVer }
+    };
+    
+    float itemY = toolsCard.y + 40;
+    for (int i = 0; i < 3; ++i) {
+        uint32_t statusCol = tools[i].available ? theme::COL_SUCCESS : theme::COL_ERROR;
+        r.fillRoundedRect({ toolsCard.x + 20, itemY + 5, 8, 8 }, statusCol, 4.0f);
+        
+        r.drawText(tools[i].name, { toolsCard.x + 36, itemY, 100, 18 }, theme::COL_ON_SURFACE, 12.0f, Renderer::Bold);
+        
+        std::string verStr = t(keys::settings_tools_ver) + " " + tools[i].version;
+        r.drawText(verStr, { toolsCard.x + 130, itemY, 150, 18 }, theme::COL_ON_SURFACE_VARIANT, 10.5f, Renderer::Regular);
+        
+        std::string pathStr = tools[i].path;
+        if (pathStr.size() > 40) {
+            pathStr = "..." + pathStr.substr(pathStr.size() - 37);
+        }
+        std::string pathLbl = t(keys::settings_tools_path) + " " + pathStr;
+        r.drawText(pathLbl, { toolsCard.x + 36, itemY + 18, cardW - 150, 14 }, theme::COL_ON_SURFACE_VARIANT, 9.5f, Renderer::Mono);
+        
+        if (!tools[i].available) {
+            bool installing = false;
+            if (i == 0) installing = state.installingWinget.load();
+            if (i == 1) installing = state.installingScoop.load();
+            if (i == 2) installing = state.installingChoco.load();
+            
+            RectF instBtn{ toolsCard.x + cardW - 110, itemY, 90, 24 };
+            if (installing) {
+                r.fillRoundedRect(instBtn, theme::COL_SURFACE_CONTAINER_HIGHEST, 4.0f);
+                r.drawText(currentLang() == Lang::En ? "Installing" : "Yukleniyor", instBtn,
+                           theme::COL_ON_SURFACE_VARIANT, 10.0f, Renderer::Bold, true, true);
+            } else {
+                bool hBtn = input.mouseInside && RectContains(instBtn, input.mouse.x, input.mouse.y);
+                drawButton(r, instBtn, currentLang() == Lang::En ? "Install" : "Yukle", false, input, hBtn);
+                pushRect(instBtn, 900 + i, tools[i].name);
+            }
+        }
+        
+        itemY += 45;
+    }
+    
+    RectF scanBtn { toolsCard.x + 20, toolsCard.y + 195, 150, 30 };
+    bool hovScan = input.mouseInside && RectContains(scanBtn, input.mouse.x, input.mouse.y);
+    if (hovScan) r.fillRoundedRect(scanBtn, theme::COL_PRIMARY_CONTAINER, 6.0f);
+    else         r.strokeRect(scanBtn, theme::COL_PRIMARY, 1.0f, 6.0f);
+    r.drawText(currentLang() == Lang::En ? "Re-scan System" : "Yeniden Tara", scanBtn,
+               theme::COL_PRIMARY, 11.0f, Renderer::Bold, true, true);
+               
+    pushRect(scanBtn, 800, "rescan");
 }
 
 } // anonymous
@@ -855,6 +1059,29 @@ bool ScreenHitTest(int x, int y, AppState& state, BackendBridge& bridge) {
                             }
                         }
                     }
+                    return true;
+                }
+                case 500: {  // Concurrency limit change
+                    int val = std::stoi(r.payload.substr(12));
+                    bridge.setConcurrencyLimit(val);
+                    return true;
+                }
+                case 600: {  // MS Store search toggle
+                    state.msStoreSearchEnabled = (r.payload == "store:on");
+                    return true;
+                }
+                case 700: {  // Clear cache
+                    bridge.clearCache();
+                    return true;
+                }
+                 case 800: {  // Rescan tools
+                    bridge.detectTools();
+                    return true;
+                }
+                case 900:
+                case 901:
+                case 902: {
+                    bridge.installTool(r.id - 900);
                     return true;
                 }
                 case 400: {  // uninstall a specific package.
