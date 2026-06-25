@@ -69,12 +69,17 @@ The compiled binary will be placed at `build/Release/MyWinApps.exe`.
 
 ## Installing MyWinApps
 
-To distribute the application to a clean PC, package the following three files together:
+To distribute the application to a clean PC, package the following four files together:
 - `MyWinApps.exe`
 - `Setup.ps1`
+- `Uninstall.ps1`
 - `setup.bat`
 
-Double-clicking **`setup.bat`** will launch the GUI installer as Administrator, let you choose the install location, create shortcuts, and optionally download and configure Winget, Scoop, and Chocolatey automatically.
+Double-clicking **`setup.bat`** will launch the GUI installer as Administrator, let you choose the install location, create shortcuts, optionally download and configure Winget, Scoop, and Chocolatey automatically, and drop an **Uninstall MyWinApps** shortcut in the Start Menu.
+
+### Uninstalling
+
+Open the **Start Menu → MyWinApps → Uninstall MyWinApps** shortcut, or run `Uninstall.ps1` directly as Administrator. The script removes the install folder, both shortcuts, and any crash logs / dumps left behind by the crash handler. Package managers (Winget, Scoop, Chocolatey) are intentionally left installed.
 
 ---
 

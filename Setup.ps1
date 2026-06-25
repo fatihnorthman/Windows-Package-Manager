@@ -4,6 +4,19 @@
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+# Resolve the actual MyWinApps version from the exe (if available) so the
+# installer can display it. Falls back to a sensible default.
+function Get-MyWinAppsVersion {
+    param([string]$ExePath)
+    if (-not (Test-Path $ExePath)) { return "0.1.0" }
+    try {
+        $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($ExePath)
+        if ($info.FileVersion) { return $info.FileVersion }
+        if ($info.ProductVersion) { return $info.ProductVersion }
+    } catch { }
+    return "0.1.0"
+}
+
 # 1. Require Administrator Elevation
 $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -13,9 +26,17 @@ if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adm
 }
 
 # 2. Form Setup
+$scriptDir = Split-Path $MyInvocation.MyCommand.Path
+if ($scriptDir -eq "") { $scriptDir = Get-Location }
+$exeSource = Join-Path $scriptDir "build\Release\MyWinApps.exe"
+if (-not (Test-Path $exeSource)) {
+    $exeSource = Join-Path $scriptDir "MyWinApps.exe"
+}
+$appVersion = Get-MyWinAppsVersion $exeSource
+
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "MyWinApps - Installer"
-$form.Size = New-Object System.Drawing.Size(560, 480)
+$form.Text = "MyWinApps $appVersion - Installer"
+$form.Size = New-Object System.Drawing.Size(560, 510)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -29,12 +50,26 @@ $fontBtn = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontSt
 
 # Title Label
 $lblTitle = New-Object System.Windows.Forms.Label
-$lblTitle.Text = "MyWinApps Installer"
+$lblTitle.Text = "MyWinApps $appVersion"
 $lblTitle.Location = New-Object System.Drawing.Point(30, 25)
 $lblTitle.Size = New-Object System.Drawing.Size(500, 35)
 $lblTitle.Font = $fontTitle
 $lblTitle.ForeColor = System.Drawing.Color::White
 $form.Controls.Add($lblTitle)
+
+# Subtitle: source exe status
+$lblSource = New-Object System.Windows.Forms.Label
+if (Test-Path $exeSource) {
+    $lblSource.Text = "Source: $exeSource"
+    $lblSource.ForeColor = System.Drawing.Color::FromArgb(255, 100, 180, 100)
+} else {
+    $lblSource.Text = "WARNING: MyWinApps.exe not found at build\Release\MyWinApps.exe or .\MyWinApps.exe"
+    $lblSource.ForeColor = System.Drawing.Color::FromArgb(255, 220, 90, 90)
+}
+$lblSource.Location = New-Object System.Drawing.Point(30, 58)
+$lblSource.Size = New-Object System.Drawing.Size(500, 16)
+$lblSource.Font = $fontLabel
+$form.Controls.Add($lblSource)
 
 # Description Label
 $lblDesc = New-Object System.Windows.Forms.Label
@@ -124,7 +159,16 @@ $chkChoco = New-Object System.Windows.Forms.CheckBox
 $chkChoco.Text = "Install Chocolatey package manager"
 $chkChoco.Location = New-Object System.Drawing.Point(20, 130)
 $chkChoco.Size = New-Object System.Drawing.Size(450, 25)
+$chkChoco.Checked = $true
 $grpOptions.Controls.Add($chkChoco)
+
+# Checkbox: Add Uninstall shortcut
+$chkUninstall = New-Object System.Windows.Forms.CheckBox
+$chkUninstall.Text = "Add uninstall shortcut in Start Menu"
+$chkUninstall.Location = New-Object System.Drawing.Point(20, 155)
+$chkUninstall.Size = New-Object System.Drawing.Size(450, 25)
+$chkUninstall.Checked = $true
+$grpOptions.Controls.Add($chkUninstall)
 
 $form.Controls.Add($grpOptions)
 
@@ -176,16 +220,6 @@ $btnInstall.Click += {
     $progressBar.Visible = $true
     $lblStatus.Visible = $true
 
-    $scriptDir = Split-Path $MyInvocation.MyCommand.Path
-    # Handle direct script invocation fallback
-    if ($scriptDir -eq "") { $scriptDir = Get-Location }
-    
-    $exeSource = Join-Path $scriptDir "build\Release\MyWinApps.exe"
-    if (-not (Test-Path $exeSource)) {
-        # Fallback to local script folder
-        $exeSource = Join-Path $scriptDir "MyWinApps.exe"
-    }
-
     if (-not (Test-Path $exeSource)) {
         [System.Windows.Forms.MessageBox]::Show("Could not find 'MyWinApps.exe' in '$scriptDir' or builds. Please place 'MyWinApps.exe' in the same folder as this script.", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         $form.Close()
@@ -209,19 +243,37 @@ $btnInstall.Click += {
 
         # 3. Create shortcuts
         $WshShell = New-Object -ComObject WScript.Shell
+        $desktopPath  = [Environment]::GetFolderPath("Desktop")
+        $programsPath  = [Environment]::GetFolderPath("Programs")
         if ($chkDesktopChecked) {
-            $shortcut = $WshShell.CreateShortcut([Join-Path [Environment]::GetFolderPath("Desktop") "MyWinApps.lnk"])
+            $shortcutPath = Join-Path $desktopPath "MyWinApps.lnk"
+            $shortcut = $WshShell.CreateShortcut($shortcutPath)
             $shortcut.TargetPath = $exeDest
             $shortcut.WorkingDirectory = $destFolder
             $shortcut.Save()
         }
         if ($chkStartMenuChecked) {
-            $startMenuDir = Join-Path [Environment]::GetFolderPath("Programs") "MyWinApps"
+            $startMenuDir = Join-Path $programsPath "MyWinApps"
             New-Item -ItemType Directory -Force -Path $startMenuDir | Out-Null
-            $shortcut = $WshShell.CreateShortcut([Join-Path $startMenuDir "MyWinApps.lnk"])
+            $shortcutPath = Join-Path $startMenuDir "MyWinApps.lnk"
+            $shortcut = $WshShell.CreateShortcut($shortcutPath)
             $shortcut.TargetPath = $exeDest
             $shortcut.WorkingDirectory = $destFolder
             $shortcut.Save()
+        }
+
+        # Optional uninstall shortcut
+        if ($chkUninstallChecked) {
+            $uninstallShortcut = Join-Path (Join-Path [Environment]::GetFolderPath("Programs") "MyWinApps") "Uninstall MyWinApps.lnk"
+            $uninstallScript = Join-Path $destFolder "Uninstall.ps1"
+            if (Test-Path $uninstallScript) {
+                $sh = $WshShell.CreateShortcut($uninstallShortcut)
+                $sh.TargetPath = "powershell.exe"
+                $sh.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$uninstallScript`" -InstallDir `"$destFolder`""
+                $sh.WorkingDirectory = $destFolder
+                $sh.IconLocation = $exeDest
+                $sh.Save()
+            }
         }
 
         # Setup security protocol
@@ -243,44 +295,81 @@ $btnInstall.Click += {
             $scoopOk = (Get-Command "scoop" -ErrorAction SilentlyContinue) -ne $null
             if (-not $scoopOk) {
                 # Install Scoop
+                Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
                 Invoke-Expression (Invoke-RestMethod -Uri "https://get.scoop.sh")
             }
         }
 
         if ($chkChocoChecked) {
             $chocoOk = (Get-Command "choco" -ErrorAction SilentlyContinue) -ne $null
+            $chocoBin = "C:\ProgramData\chocolatey\bin\choco.exe"
+            if (-not (Test-Path $chocoBin)) { $chocoOk = $false }
             if (-not $chocoOk) {
-                # Clean up corrupt directory if any
+                # The official installer refuses to run if ChocolateyInstall env
+                # var points to a path that doesn't exist (it thinks choco is
+                # already installed). Clear both User and Machine vars first.
+                [System.Environment]::SetEnvironmentVariable("ChocolateyInstall", $null, "User")
+                [System.Environment]::SetEnvironmentVariable("ChocolateyInstall", $null, "Machine")
                 if (Test-Path 'C:\ProgramData\chocolatey') {
                     Remove-Item -Path 'C:\ProgramData\chocolatey' -Recurse -Force -ErrorAction SilentlyContinue
                 }
                 # Install Chocolatey
+                Set-ExecutionPolicy Bypass -Scope Process -Force
+                [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
                 Invoke-Expression (New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1')
             }
         }
-    } -ArgumentList $exeSource, $destFolder, $chkDesktop.Checked, $chkStartMenu.Checked, $chkWinget.Checked, $chkScoop.Checked, $chkChoco.Checked | Out-Null
 
-    # Progress Animation Timer
+        # 5. Optionally copy Uninstall.ps1 next to the exe and add Start
+        # Menu shortcut to it (clean uninstall path for the user).
+        $uninstallSource = Join-Path $scriptDir "Uninstall.ps1"
+        $uninstallDest   = Join-Path $destFolder "Uninstall.ps1"
+        if ($chkUninstallChecked -and (Test-Path $uninstallSource)) {
+            Copy-Item -Path $uninstallSource -Destination $uninstallDest -Force
+        }
+    } -ArgumentList $exeSource, $destFolder, $chkDesktop.Checked, $chkStartMenu.Checked, $chkWinget.Checked, $chkScoop.Checked, $chkChoco.Checked, $chkUninstall.Checked | Out-Null
+
+    # Progress Animation Timer — polls the job and reports any errors
     $steps = 0
     $timer = New-Object System.Windows.Forms.Timer
     $timer.Interval = 200
     $timer.Add_Tick({
-        $job = Get-Job -Name "InstallerTask"
+        $job = Get-Job -Name "InstallerTask" -ErrorAction SilentlyContinue
+        if (-not $job) { $timer.Stop(); return }
         if ($job.State -eq "Running") {
             $steps = ($steps + 5) % 100
             $progressBar.Value = $steps
             $lblStatus.Text = "Copying files and configuring environment..."
         } else {
             $timer.Stop()
-            $jobData = Receive-Job -Job $job
-            Remove-Job -Name "InstallerTask" -Force
-            
+            $jobOutput = Receive-Job -Job $job -ErrorAction SilentlyContinue
+            Remove-Job -Name "InstallerTask" -Force -ErrorAction SilentlyContinue
+
+            if ($job.State -eq "Failed") {
+                $progressBar.Value = 0
+                $progressBar.ForeColor = System.Drawing.Color::FromArgb(255, 220, 90, 90)
+                $errMsg = ($jobOutput -join "`n")
+                $lblStatus.Text = "Installation FAILED"
+                $lblStatus.ForeColor = System.Drawing.Color::FromArgb(255, 220, 90, 90)
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Installation failed.`n`nDetails:`n$errMsg",
+                    "MyWinApps - Installer",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Error)
+                $btnInstall.Enabled = $true
+                $btnBrowse.Enabled = $true
+                $txtPath.Enabled = $true
+                $grpOptions.Enabled = $true
+                $btnCancel.Enabled = $true
+                $progressBar.Visible = $false
+                $lblStatus.Visible = $false
+                return
+            }
+
             $progressBar.Value = 100
             $lblStatus.Text = "Installation completed successfully!"
-            
+
             $exeDest = Join-Path $destFolder "MyWinApps.exe"
-            
-            # Show completed dialog
             $launch = [System.Windows.Forms.MessageBox]::Show("MyWinApps has been installed successfully!`n`nWould you like to launch the application now?", "Installation Completed", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Information)
             if ($launch -eq "Yes") {
                 Start-Process $exeDest
