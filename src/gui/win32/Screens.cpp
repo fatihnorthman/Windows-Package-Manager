@@ -2,6 +2,7 @@
 #include "ClickRects.h"
 #include "../i18n.h"
 #include "Theme.h"
+#include <windows.h>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -19,6 +20,15 @@ namespace mdl2 {
 }
 
 namespace {
+
+std::wstring utf8ToWide(const std::string& s) {
+    if (s.empty()) return {};
+    int len = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+    if (len <= 0) return {};
+    std::wstring out(static_cast<size_t>(len - 1), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, out.data(), len);
+    return out;
+}
 
 // Hit-test helper used by many draw functions.
 bool RectContains(const RectF& r, int x, int y) {
@@ -303,13 +313,10 @@ void renderDiscover(Renderer& r, AppState& state, BackendBridge& bridge,
             bool       inflight    = false;
             int        liveProgress = 0;
             InstallState liveState  = InstallState::Unknown;
-            {
-                std::lock_guard<std::mutex> lk(state.mtx);
-                for (const auto& key : state.inFlight) {
-                    if (key.id == p.id && key.manager == p.manager) {
-                        inflight = true;
-                        break;
-                    }
+            for (const auto& key : state.inFlight) {
+                if (key.id == p.id && key.manager == p.manager) {
+                    inflight = true;
+                    break;
                 }
             }
             for (const auto& tt : taskSnap) {
@@ -344,8 +351,7 @@ void renderDiscover(Renderer& r, AppState& state, BackendBridge& bridge,
                 }
             } else if (liveState == InstallState::Installed) {
                 r.drawText(std::wstring(mdl2::CheckMark) + L"  " +
-                           std::wstring(t(keys::updates_btn_done).begin(),
-                                        t(keys::updates_btn_done).end()),
+                           utf8ToWide(t(keys::updates_btn_done)),
                            ibtn, theme::COL_SUCCESS,
                            11.0f, Renderer::Bold, true, true);
             } else if (inflight || liveState == InstallState::Queued) {
@@ -446,13 +452,10 @@ void renderInstalled(Renderer& r, AppState& state, BackendBridge& bridge,
             bool       inflight     = false;
             int        liveProgress = 0;
             InstallState liveState  = InstallState::Unknown;
-            {
-                std::lock_guard<std::mutex> lk(state.mtx);
-                for (const auto& key : state.inFlight) {
-                    if (key.id == p.id && key.manager == p.manager) {
-                        inflight = true;
-                        break;
-                    }
+            for (const auto& key : state.inFlight) {
+                if (key.id == p.id && key.manager == p.manager) {
+                    inflight = true;
+                    break;
                 }
             }
             for (const auto& tt : taskSnap) {
@@ -635,11 +638,8 @@ void renderUpdates(Renderer& r, AppState& state, BackendBridge& bridge,
         bool inflight = false;
         int  liveProgress = 0;
         InstallState liveState = InstallState::Unknown;
-        {
-            std::lock_guard<std::mutex> lk(state.mtx);
-            for (const auto& key : state.inFlight) {
-                if (key.id == p.id && key.manager == p.manager) { inflight = true; break; }
-            }
+        for (const auto& key : state.inFlight) {
+            if (key.id == p.id && key.manager == p.manager) { inflight = true; break; }
         }
         for (const auto& tt : updatesTaskSnap) {
             if (tt.package.id == p.id) {
@@ -670,8 +670,7 @@ void renderUpdates(Renderer& r, AppState& state, BackendBridge& bridge,
             }
         } else if (liveState == InstallState::Installed) {
             r.drawText(std::wstring(mdl2::CheckMark) + L"  " +
-                       std::wstring(t(keys::updates_btn_done).begin(),
-                                    t(keys::updates_btn_done).end()),
+                       utf8ToWide(t(keys::updates_btn_done)),
                        actRect, theme::COL_SUCCESS, 12.0f, Renderer::Bold, true, true);
         } else {
             bool hov = input.mouseInside && RectContains(actRect, input.mouse.x, input.mouse.y);

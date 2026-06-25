@@ -21,12 +21,13 @@ public:
 
 private:
     bool initWindow(HINSTANCE hInstance, int w, int h);
-    void renderFrame();
     void handleResize(UINT w, UINT h);
 
 public:  // Called from the WndProc in the same translation unit.
     void handleMouseUp(int x, int y);
     void handleMouseMove(int x, int y);
+    void renderFrame();
+    void updateTimer();
 
     HWND          hwnd_ = nullptr;
     Renderer      renderer_;
@@ -34,6 +35,7 @@ public:  // Called from the WndProc in the same translation unit.
     BackendBridge bridge_;
     bool          running_ = false;
     bool          maximized_ = false;
+    bool          timerActive_ = false;
 };
 
 // WndProc routed through static function. Friend so it can call private

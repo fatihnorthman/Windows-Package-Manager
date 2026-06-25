@@ -11,10 +11,45 @@ namespace pm {
 
 namespace {
 
+struct UniqueHandle {
+    HANDLE handle = INVALID_HANDLE_VALUE;
+
+    UniqueHandle() = default;
+    explicit UniqueHandle(HANDLE h) : handle(h) {}
+    ~UniqueHandle() { reset(); }
+
+    UniqueHandle(const UniqueHandle&) = delete;
+    UniqueHandle& operator=(const UniqueHandle&) = delete;
+
+    UniqueHandle(UniqueHandle&& o) noexcept : handle(o.handle) {
+        o.handle = INVALID_HANDLE_VALUE;
+    }
+
+    UniqueHandle& operator=(UniqueHandle&& o) noexcept {
+        if (this != &o) {
+            reset();
+            handle = o.handle;
+            o.handle = INVALID_HANDLE_VALUE;
+        }
+        return *this;
+    }
+
+    void reset(HANDLE h = INVALID_HANDLE_VALUE) {
+        if (handle != INVALID_HANDLE_VALUE && handle != nullptr) {
+            CloseHandle(handle);
+        }
+        handle = h;
+    }
+
+    HANDLE get() const { return handle; }
+    bool isValid() const { return handle != INVALID_HANDLE_VALUE && handle != nullptr; }
+    operator HANDLE() const { return handle; }
+};
+
 struct Pipes {
-    HANDLE read  = INVALID_HANDLE_VALUE;
-    HANDLE write = INVALID_HANDLE_VALUE;
-    bool   ok() const { return read != INVALID_HANDLE_VALUE && write != INVALID_HANDLE_VALUE; }
+    UniqueHandle read;
+    UniqueHandle write;
+    bool   ok() const { return read.isValid() && write.isValid(); }
 };
 
 Pipes makePipe() {
@@ -23,8 +58,13 @@ Pipes makePipe() {
     sa.nLength        = sizeof(sa);
     sa.bInheritHandle = TRUE;
     sa.lpSecurityDescriptor = nullptr;
-    if (!CreatePipe(&p.read, &p.write, &sa, 0)) return p;
-    SetHandleInformation(p.read, HANDLE_FLAG_INHERIT, 0);
+    HANDLE r = INVALID_HANDLE_VALUE;
+    HANDLE w = INVALID_HANDLE_VALUE;
+    if (CreatePipe(&r, &w, &sa, 0)) {
+        p.read.reset(r);
+        p.write.reset(w);
+        SetHandleInformation(p.read, HANDLE_FLAG_INHERIT, 0);
+    }
     return p;
 }
 
@@ -87,8 +127,8 @@ void ProcessRunner::run() {
         si.cb         = sizeof(si);
         si.dwFlags    = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
         si.hStdInput  = GetStdHandle(STD_INPUT_HANDLE);
-        si.hStdOutput = outP.write;
-        si.hStdError  = errP.write;
+        si.hStdOutput = outP.write.get();
+        si.hStdError  = errP.write.get();
         si.wShowWindow = SW_HIDE;
 
         std::wstring cmd = L"\"" + utf8ToWide(opts_.executable) + L"\"";
@@ -115,8 +155,6 @@ void ProcessRunner::run() {
         if (!ok) {
             DWORD err = GetLastError();
             Logger::instance().error("CreateProcess failed (err=", err, "): ", opts_.executable);
-            CloseHandle(outP.read);  CloseHandle(outP.write);
-            CloseHandle(errP.read);  CloseHandle(errP.write);
             running_ = false;
             CompleteCb cb = std::move(completeCb_);
             progressCb_ = nullptr;
@@ -125,13 +163,16 @@ void ProcessRunner::run() {
             return;
         }
 
+        UniqueHandle processH(pi.hProcess);
+        UniqueHandle threadH(pi.hThread);
+
         {
             std::lock_guard<std::mutex> lk(handleMtx_);
-            processHandle_ = pi.hProcess;
+            processHandle_ = processH.get();
         }
-        CloseHandle(pi.hThread);
-        CloseHandle(outP.write);
-        CloseHandle(errP.write);
+        threadH.reset();
+        outP.write.reset();
+        errP.write.reset();
 
         // Shared collected text + simple progress percent
         std::string outBuf, errBuf;
@@ -235,19 +276,16 @@ void ProcessRunner::run() {
             }
         });
 
-        WaitForSingleObject(processHandle_, INFINITE);
+        WaitForSingleObject(processH.get(), INFINITE);
         outThread.join();
         errThread.join();
 
         DWORD exitCode = 0;
+        GetExitCodeProcess(processH.get(), &exitCode);
         {
             std::lock_guard<std::mutex> lk(handleMtx_);
-            GetExitCodeProcess(processHandle_, &exitCode);
-            CloseHandle(processHandle_);
             processHandle_ = nullptr;
         }
-        CloseHandle(outP.read);
-        CloseHandle(errP.read);
 
         running_ = false;
 

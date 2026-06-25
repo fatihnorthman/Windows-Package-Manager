@@ -19,11 +19,9 @@ void runAndParseAsync(
     ProcessOptions opt,
     std::function<std::vector<PackageInfo>(const std::string&)> parseFn,
     PackageListCallback cb) {
+    auto runner = std::make_shared<ProcessRunner>();
     try {
-        auto promise = std::make_shared<std::promise<void>>();
-        auto fut     = promise->get_future();
-        auto runner  = std::make_shared<ProcessRunner>();
-        runner->onComplete([cb, parseFn = std::move(parseFn), promise](const ProcessResult& res) mutable {
+        runner->onComplete([cb, parseFn = std::move(parseFn), runner](const ProcessResult& res) mutable {
             try {
                 std::vector<PackageInfo> pkgs;
                 std::string err;
@@ -42,19 +40,19 @@ void runAndParseAsync(
             } catch (...) {
                 Logger::instance().error("Unknown exception in runAndParseAsync callback");
             }
-            try { promise->set_value(); } catch (...) {}
         });
         if (!runner->start(opt)) {
+            runner->onComplete(nullptr);
             if (cb) cb({}, "ProcessRunner busy");
-            try { promise->set_value(); } catch (...) {}
             return;
         }
-        fut.wait();
     } catch (const std::exception& e) {
         Logger::instance().error("Exception in runAndParseAsync: ", e.what());
+        runner->onComplete(nullptr);
         if (cb) cb({}, std::string("Internal exception: ") + e.what());
     } catch (...) {
         Logger::instance().error("Unknown exception in runAndParseAsync");
+        runner->onComplete(nullptr);
         if (cb) cb({}, "Unknown internal exception");
     }
 }
@@ -63,18 +61,19 @@ bool probeVersion(const std::string& executable) {
     ProcessOptions opt;
     opt.executable = executable;
     opt.arguments  = { "--version" };
-    ProcessRunner r;
-    std::atomic<int> done{0};
-    bool ok = false;
-    r.onComplete([&](const ProcessResult& res) {
-        ok = (res.exitCode == 0);
-        done.store(1);
+    auto runner = std::make_shared<ProcessRunner>();
+    auto promise = std::make_shared<std::promise<bool>>();
+    auto future = promise->get_future();
+    runner->onComplete([promise](const ProcessResult& res) {
+        promise->set_value(res.exitCode == 0 && !res.cancelled);
     });
-    if (!r.start(opt)) return false;
-    // Cap wait at 2s so a hung tool doesn't stall boot forever.
-    for (int i = 0; i < 40 && done.load() == 0; ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    return ok && done.load() == 1;
+    if (!runner->start(opt)) return false;
+    if (future.wait_for(std::chrono::seconds(2)) == std::future_status::ready) {
+        return future.get();
+    } else {
+        runner->cancel();
+        return false;
+    }
 }
 
 std::string extractError(const ProcessResult& res) {

@@ -128,51 +128,21 @@ void ChocoAdapter::listInstalled(PackageListCallback cb) {
     ProcessOptions opt;
     opt.executable = resolveChocoPath();
     opt.arguments  = { "list", "--limit-output" };
-    std::thread([cb = std::move(cb), opt]() mutable {
-        try {
-            adapters::runAndParseAsync(opt, parseChocoList, std::move(cb));
-        } catch (const std::exception& e) {
-            Logger::instance().error("Exception inside ChocoAdapter listInstalled thread: ", e.what());
-            if (cb) cb({}, std::string("Internal exception: ") + e.what());
-        } catch (...) {
-            Logger::instance().error("Unknown exception inside ChocoAdapter listInstalled thread");
-            if (cb) cb({}, "Unknown internal exception");
-        }
-    }).detach();
+    adapters::runAndParseAsync(opt, parseChocoList, std::move(cb));
 }
 
 void ChocoAdapter::listUpgradable(PackageListCallback cb) {
     ProcessOptions opt;
     opt.executable = resolveChocoPath();
     opt.arguments  = { "outdated", "--limit-output" };
-    std::thread([cb = std::move(cb), opt]() mutable {
-        try {
-            adapters::runAndParseAsync(opt, parseChocoOutdated, std::move(cb));
-        } catch (const std::exception& e) {
-            Logger::instance().error("Exception inside ChocoAdapter listUpgradable thread: ", e.what());
-            if (cb) cb({}, std::string("Internal exception: ") + e.what());
-        } catch (...) {
-            Logger::instance().error("Unknown exception inside ChocoAdapter listUpgradable thread");
-            if (cb) cb({}, "Unknown internal exception");
-        }
-    }).detach();
+    adapters::runAndParseAsync(opt, parseChocoOutdated, std::move(cb));
 }
 
 void ChocoAdapter::search(const std::string& query, PackageListCallback cb) {
     ProcessOptions opt;
     opt.executable = resolveChocoPath();
     opt.arguments  = { "search", query, "--limit-output" };
-    std::thread([cb = std::move(cb), opt]() mutable {
-        try {
-            adapters::runAndParseAsync(opt, parseChocoSearch, std::move(cb));
-        } catch (const std::exception& e) {
-            Logger::instance().error("Exception inside ChocoAdapter search thread: ", e.what());
-            if (cb) cb({}, std::string("Internal exception: ") + e.what());
-        } catch (...) {
-            Logger::instance().error("Unknown exception inside ChocoAdapter search thread");
-            if (cb) cb({}, "Unknown internal exception");
-        }
-    }).detach();
+    adapters::runAndParseAsync(opt, parseChocoSearch, std::move(cb));
 }
 
 void ChocoAdapter::performAction(const PackageInfo& pkg,

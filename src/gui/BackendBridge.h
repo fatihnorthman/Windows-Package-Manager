@@ -3,6 +3,7 @@
 #include "../core/PackageInfo.h"
 #include "../adapters/IPackageAdapter.h"
 #include "../services/TaskQueue.h"
+#include <windows.h>
 #include <array>
 #include <memory>
 #include <mutex>
@@ -21,7 +22,8 @@ enum class ScreenId {
 };
 
 struct AppState {
-    mutable std::mutex               mtx;
+    mutable std::recursive_mutex     mtx;
+    HWND                             hwnd = nullptr;
 
     ScreenId                         currentScreen = ScreenId::Updates;
 

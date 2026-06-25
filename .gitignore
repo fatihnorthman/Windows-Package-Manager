@@ -70,3 +70,10 @@ desktop.ini
 # UI test artifacts (PowerShell screenshot captures)
 uitest_*.png
 final_*.png
+
+# winget/scoop export output (user-specific, never commit)
+winget_test.json
+scoop_test.json
+choco_test.json
+*.export.json
+packages.json

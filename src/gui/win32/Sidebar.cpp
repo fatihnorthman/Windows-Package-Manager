@@ -111,7 +111,6 @@ void Sidebar::draw(Renderer& r, AppState& state, const InputState& input) {
 
         // Dynamic badge for Updates tab: show the count of upgradable packages.
         if (item.id == ScreenId::Updates) {
-            std::lock_guard<std::mutex> lk(state.mtx);
             int count = static_cast<int>(state.upgradable.size());
             if (count > 0) {
                 char buf[8];

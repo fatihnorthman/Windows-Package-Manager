@@ -35,10 +35,10 @@ public:
         std::cerr << "[" << std::put_time(&tm, "%H:%M:%S") << "] ["
                   << names[static_cast<int>(l)] << "] " << msg << std::endl;
                   
-        std::ofstream logFile("PackageManager.log", std::ios::app);
-        if (logFile) {
-            logFile << "[" << std::put_time(&tm, "%H:%M:%S") << "] ["
-                    << names[static_cast<int>(l)] << "] " << msg << "\n";
+        if (logFile_.is_open()) {
+            logFile_ << "[" << std::put_time(&tm, "%H:%M:%S") << "] ["
+                     << names[static_cast<int>(l)] << "] " << msg << "\n";
+            logFile_.flush();
         }
     }
 
@@ -63,9 +63,17 @@ public:
     void error(Args&&... args) { write(LogLevel::Error, std::forward<Args>(args)...); }
 
 private:
-    Logger() = default;
-    LogLevel   level_ = LogLevel::Info;
-    std::mutex mtx_;
+    Logger() {
+        logFile_.open("PackageManager.log", std::ios::app);
+    }
+    ~Logger() {
+        if (logFile_.is_open()) {
+            logFile_.close();
+        }
+    }
+    LogLevel      level_ = LogLevel::Info;
+    std::mutex    mtx_;
+    std::ofstream logFile_;
 };
 
 } // namespace pm

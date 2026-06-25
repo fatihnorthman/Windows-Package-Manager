@@ -150,40 +150,6 @@ std::vector<PackageInfo> parseSearchTable(const std::string& table, const std::s
 
 // ---------------- File-based runner for `winget export` --------------------
 
-std::string runAndReadFile(const std::vector<std::string>& args, const std::filesystem::path& file) {
-    try {
-        auto promise = std::make_shared<std::promise<bool>>();
-        auto fut     = promise->get_future();
-        auto captured = std::make_shared<std::string>();
-
-        ProcessOptions opt;
-        opt.executable = "winget";
-        opt.arguments  = args;
-
-        auto runner = std::make_shared<ProcessRunner>();
-        runner->onComplete([captured, promise](const ProcessResult& res) {
-            try {
-                *captured = res.stdoutText + res.stderrText;
-                promise->set_value(res.exitCode == 0 && !res.cancelled);
-            } catch (...) {
-                try { promise->set_value(false); } catch (...) {}
-            }
-        });
-        if (!runner->start(opt)) return {};
-        fut.wait();
-        if (!std::filesystem::exists(file)) return {};
-        std::ifstream in(file);
-        std::stringstream ss; ss << in.rdbuf();
-        return ss.str();
-    } catch (const std::exception& e) {
-        Logger::instance().error("Exception in runAndReadFile: ", e.what());
-        return {};
-    } catch (...) {
-        Logger::instance().error("Unknown exception in runAndReadFile");
-        return {};
-    }
-}
-
 std::filesystem::path makeTempJson() {
     auto p = std::filesystem::temp_directory_path() /
              (std::string("winget_export_") +
@@ -218,64 +184,56 @@ bool WingetAdapter::isAvailable() const {
 
 void WingetAdapter::listInstalled(PackageListCallback cb) {
     auto tmp = makeTempJson();
-    std::thread([cb = std::move(cb), tmp]() mutable {
+    ProcessOptions opt;
+    opt.executable = "winget";
+    opt.arguments  = {"export", "-o", tmp.string(), "--accept-source-agreements"};
+
+    auto runner = std::make_shared<ProcessRunner>();
+    runner->onComplete([cb = std::move(cb), tmp, runner](const ProcessResult& res) mutable {
+        std::vector<PackageInfo> pkgs;
+        std::string err;
         try {
-            std::vector<std::string> args = {"export", "-o", tmp.string(), "--accept-source-agreements"};
-            std::string json = runAndReadFile(args, tmp);
-            std::error_code ec; std::filesystem::remove(tmp, ec);
-            std::vector<PackageInfo> pkgs;
-            std::string err;
-            if (json.empty()) {
-                err = "winget export produced no JSON file";
-            } else {
+            if (res.exitCode == 0 && !res.cancelled && std::filesystem::exists(tmp)) {
+                std::ifstream in(tmp);
+                std::stringstream ss; ss << in.rdbuf();
+                std::string json = ss.str();
+                in.close();
+                std::error_code ec; std::filesystem::remove(tmp, ec);
+
                 try { pkgs = parseExportJson(json); }
                 catch (const std::exception& e) { err = std::string("parse: ") + e.what(); }
+            } else {
+                std::error_code ec; std::filesystem::remove(tmp, ec);
+                err = "winget export failed or cancelled";
+                if (!res.stderrText.empty()) err += ": " + res.stderrText;
             }
-            if (cb) cb(std::move(pkgs), std::move(err));
         } catch (const std::exception& e) {
-            Logger::instance().error("Exception inside WingetAdapter listInstalled thread: ", e.what());
-            if (cb) cb({}, std::string("Internal exception: ") + e.what());
-        } catch (...) {
-            Logger::instance().error("Unknown exception inside WingetAdapter listInstalled thread");
-            if (cb) cb({}, "Unknown internal exception");
+            err = std::string("Internal error: ") + e.what();
         }
-    }).detach();
+        if (cb) cb(std::move(pkgs), std::move(err));
+    });
+
+    if (!runner->start(opt)) {
+        runner->onComplete(nullptr);
+        std::error_code ec; std::filesystem::remove(tmp, ec);
+        if (cb) cb({}, "ProcessRunner busy");
+    }
 }
 
 void WingetAdapter::listUpgradable(PackageListCallback cb) {
     ProcessOptions opt;
     opt.executable = "winget";
     opt.arguments  = {"upgrade", "--accept-source-agreements"};
-    std::thread([cb = std::move(cb), opt]() mutable {
-        try {
-            adapters::runAndParseAsync(opt, parseUpgradeTable, std::move(cb));
-        } catch (const std::exception& e) {
-            Logger::instance().error("Exception inside WingetAdapter listUpgradable thread: ", e.what());
-            if (cb) cb({}, std::string("Internal exception: ") + e.what());
-        } catch (...) {
-            Logger::instance().error("Unknown exception inside WingetAdapter listUpgradable thread");
-            if (cb) cb({}, "Unknown internal exception");
-        }
-    }).detach();
+    adapters::runAndParseAsync(opt, parseUpgradeTable, std::move(cb));
 }
 
 void WingetAdapter::search(const std::string& query, PackageListCallback cb) {
     ProcessOptions opt;
     opt.executable = "winget";
     opt.arguments  = {"search", query, "--accept-source-agreements"};
-    std::thread([cb = std::move(cb), opt, query]() mutable {
-        try {
-            adapters::runAndParseAsync(opt,
-                [query](const std::string& s) { return parseSearchTable(s, query); },
-                std::move(cb));
-        } catch (const std::exception& e) {
-            Logger::instance().error("Exception inside WingetAdapter search thread: ", e.what());
-            if (cb) cb({}, std::string("Internal exception: ") + e.what());
-        } catch (...) {
-            Logger::instance().error("Unknown exception inside WingetAdapter search thread");
-            if (cb) cb({}, "Unknown internal exception");
-        }
-    }).detach();
+    adapters::runAndParseAsync(opt,
+        [query](const std::string& s) { return parseSearchTable(s, query); },
+        std::move(cb));
 }
 
 void WingetAdapter::performAction(const PackageInfo& pkg,

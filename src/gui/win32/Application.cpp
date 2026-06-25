@@ -32,6 +32,21 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
 
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            BeginPaint(hwnd, &ps);
+            g_app->renderFrame();
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+
+        case WM_TIMER: {
+            if (wParam == 1) {
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        }
+
         case WM_MOUSEMOVE: {
             int x = GET_X_LPARAM(lParam);
             int y = GET_Y_LPARAM(lParam);
@@ -39,15 +54,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             g_app->input().mouse.y = y;
             g_app->input().mouseInside = true;
             g_app->handleMouseMove(x, y);
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
 
         case WM_MOUSELEAVE:
             g_app->input().mouseInside = false;
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
 
         case WM_LBUTTONDOWN:
             g_app->input().mouseDown = true;
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
 
         case WM_LBUTTONUP: {
@@ -55,6 +73,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             int x = GET_X_LPARAM(lParam);
             int y = GET_Y_LPARAM(lParam);
             g_app->handleMouseUp(x, y);
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
 
@@ -63,7 +82,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             // focused TextInput. Enter triggers the bound action
             // (currently runSearch on the Discover query).
             auto& s = g_app->bridge().state();
-            std::lock_guard<std::mutex> lk(s.mtx);
+            std::lock_guard<std::recursive_mutex> lk(s.mtx);
             if (!s.searchInput.focused) return 0;
             wchar_t wc = (wchar_t)wParam;
             if (wc == L'\r' || wc == L'\n') {
@@ -77,6 +96,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 char c = (char)wc;
                 s.searchInput.text += c;
             }
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
 
@@ -93,11 +113,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_KEYDOWN:
             if (wParam == VK_SHIFT) g_app->input().shift = true;
             if (wParam == VK_CONTROL) g_app->input().ctrl = true;
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
 
         case WM_KEYUP:
             if (wParam == VK_SHIFT) g_app->input().shift = false;
             if (wParam == VK_CONTROL) g_app->input().ctrl = false;
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
 
         case WM_MOUSEWHEEL: {
@@ -105,11 +127,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             int rows   = delta / 60;
             if (rows == 0) rows = (delta > 0) ? 1 : -1;
             auto& s    = g_app->bridge().state();
-            std::lock_guard<std::mutex> lk(s.mtx);
+            std::lock_guard<std::recursive_mutex> lk(s.mtx);
             int  idx   = static_cast<int>(s.currentScreen);
             int  next  = s.scrollOffset[idx] - rows;
             if (next < 0) next = 0;
             s.scrollOffset[idx] = next;
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
 
@@ -174,6 +197,7 @@ bool Application::init(HINSTANCE hInstance, int w, int h) {
         return false;
     }
     bridge_.init();
+    bridge_.state().hwnd = hwnd_;
     bridge_.refreshInstalled();
     bridge_.refreshUpgradable();
     return true;
@@ -224,7 +248,7 @@ bool Application::initWindow(HINSTANCE hInstance, int w, int h) {
 
 void Application::handleMouseUp(int x, int y) {
     AppState& state = bridge_.state();
-    std::lock_guard<std::mutex> lk(state.mtx);
+    std::lock_guard<std::recursive_mutex> lk(state.mtx);
     RECT rc; GetClientRect(hwnd_, &rc);
     const float W = static_cast<float>(rc.right);
     const float H = static_cast<float>(rc.bottom);
@@ -267,7 +291,7 @@ void Application::handleMouseMove(int x, int y) {
 
 void Application::renderFrame() {
     AppState& state = bridge_.state();
-    std::lock_guard<std::mutex> lk(state.mtx);
+    std::lock_guard<std::recursive_mutex> lk(state.mtx);
 
     renderer_.beginFrame();
     renderer_.clear(theme::COL_BACKGROUND);
@@ -296,21 +320,36 @@ void Application::renderFrame() {
     TaskDrawer::draw(renderer_, state, bridge_, input_, W, H);
 
     renderer_.endFrame();
+
+    updateTimer();
+}
+
+void Application::updateTimer() {
+    bool needsTimer = bridge_.state().loadingInstalled.load() ||
+                      bridge_.state().loadingUpgradable.load() ||
+                      bridge_.state().loadingSearch.load() ||
+                      bridge_.activeTasks() > 0 ||
+                      bridge_.pendingTasks() > 0;
+    if (needsTimer) {
+        if (!timerActive_) {
+            SetTimer(hwnd_, 1, 33, nullptr);
+            timerActive_ = true;
+        }
+    } else {
+        if (timerActive_) {
+            KillTimer(hwnd_, 1);
+            timerActive_ = false;
+        }
+    }
 }
 
 int Application::run() {
     MSG msg = {};
-    while (true) {
-        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            if (msg.message == WM_QUIT) {
-                return static_cast<int>(msg.wParam);
-            }
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-        renderFrame();
-        Sleep(1);
+    while (GetMessageW(&msg, nullptr, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
     }
+    return static_cast<int>(msg.wParam);
 }
 
 } // namespace pm::gui::win32
